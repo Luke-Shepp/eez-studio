@@ -18,7 +18,10 @@ import {
     sendMessage
 } from "eez-studio-shared/notify";
 
-import type { InstrumentObject } from "instrument/instrument-object";
+import {
+    instruments,
+    type InstrumentObject
+} from "instrument/instrument-object";
 import { EthernetInterface } from "instrument/connection/interfaces/ethernet";
 import { SerialInterface } from "instrument/connection/interfaces/serial";
 import { UsbTmcInterface } from "instrument/connection/interfaces/usbtmc";
@@ -713,7 +716,10 @@ export class Connection
 
     enablePlotter() {
         try {
-            this.startLongOperation(() => new Plotter(this), false);
+            this.startLongOperation(
+                () => new Plotter(this, this.instrument),
+                false
+            );
         } catch (err) {
             this.logAnswer(`**ERROR: ${err}\n`);
         }
@@ -1059,6 +1065,21 @@ export function setupIpcServer() {
     );
 
     ipcMain.on(
+        "instrument/connection/create-plotter",
+        function (
+            event: Electron.IpcMainEvent,
+            arg: {
+                instrumentId: string;
+                answerIds: string[];
+            }
+        ) {
+            if (!Plotter.createPlotter(arg.instrumentId, arg.answerIds)) {
+                event.sender.send("create-plotter-no-data");
+            }
+        }
+    );
+
+    ipcMain.on(
         "instrument/connection/abort-long-operation",
         function (
             event: any,
@@ -1193,4 +1214,14 @@ export function createMainProcessConnection(instrument: InstrumentObject) {
     const connection = new Connection(instrument);
     runInAction(() => connections.set(instrument.id.toString(), connection));
     return connection;
+}
+
+export function closeConnections() {
+    instruments.forEach(instrument => {
+        if (instrument.connection.isConnected) {
+            instrument.connection.disconnect();
+        } else {
+            instrument.connection.abortLongOperation();
+        }
+    });
 }

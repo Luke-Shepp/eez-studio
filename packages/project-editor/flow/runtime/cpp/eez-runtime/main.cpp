@@ -74,18 +74,6 @@ void finishToDebuggerMessage() {
     }, eez::flow::g_wasmModuleId);
 }
 
-void executeDashboardComponent(uint16_t componentType, int flowStateIndex, int componentIndex) {
-    EM_ASM({
-        executeDashboardComponent($0, $1, $2, $3);
-    }, eez::flow::g_wasmModuleId, componentType, flowStateIndex, componentIndex);
-}
-
-void onArrayValueFree(eez::ArrayValue *arrayValue) {
-    EM_ASM({
-        onArrayValueFree($0, $1);
-    }, eez::flow::g_wasmModuleId, arrayValue);
-}
-
 EM_PORT_API(void) stopScript() {
     eez::flow::stop();
 }
@@ -111,8 +99,7 @@ EM_PORT_API(void) init(uint32_t wasmModuleId, uint32_t debuggerMessageSubsciptio
     eez::flow::startToDebuggerMessageHook = startToDebuggerMessage;
     eez::flow::writeDebuggerBufferHook = writeDebuggerBuffer;
     eez::flow::finishToDebuggerMessageHook = finishToDebuggerMessage;
-    eez::flow::executeDashboardComponentHook = executeDashboardComponent;
-    eez::flow::onArrayValueFreeHook = onArrayValueFree;
+
     eez::flow::stopScriptHook = stopScript;
     eez::flow::showKeyboardHook = eez::gui::showKeyboard;
     eez::flow::showKeypadHook = eez::gui::showKeypad;

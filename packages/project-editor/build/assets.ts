@@ -138,6 +138,8 @@ export class Assets {
         }
     >();
 
+    jsonValues: any[] = [];
+
     constants: FlowValue[] = [];
     constantsMap = new Map<
         undefined | boolean | number | string | object,
@@ -148,6 +150,7 @@ export class Assets {
         flows: [],
         flowIndexes: {},
         actionFlowIndexes: {},
+        jsonValues: [],
         constants: [],
         globalVariables: [],
         dashboardComponentTypeToNameMap: {},
@@ -935,8 +938,22 @@ export class Assets {
         return this.getFlowIndex(action);
     }
 
+    registerJSONValue(value: any) {
+        for (let i = 0; i < this.jsonValues.length; i++) {
+            if (JSON.stringify(value) == JSON.stringify(this.jsonValues[i])) {
+                return i + 1;
+            }
+        }
+
+        this.jsonValues.push(value);
+
+        return this.jsonValues.length;
+    }
+
     getConstantIndex(value: any, valueType: ValueType) {
-        let index = this.constantsMap.get(`${valueType}:value`);
+        const key = `${valueType}:${value}`;
+
+        let index = this.constantsMap.get(key);
         if (index == undefined) {
             index = this.constants.length;
             this.constants.push({
@@ -944,7 +961,7 @@ export class Assets {
                 value,
                 valueType
             });
-            this.constantsMap.set(value, index);
+            this.constantsMap.set(key, index);
         }
         return index;
     }
@@ -1137,6 +1154,8 @@ export class Assets {
     }
 
     finalizeMap() {
+        this.map.jsonValues = this.jsonValues;
+
         this.map.constants = this.constants;
 
         this.flows.forEach(flow => {
@@ -1258,12 +1277,14 @@ export class Assets {
 
 function buildHeaderData(
     assets: Assets,
-    decompressedSize: number,
-    dataBuffer: DataBuffer
+    uncompressedSize: number,
+    dataBuffer: DataBuffer,
+    uncompressed: boolean
 ) {
     // tag
-    // HEADER_TAG = 0x7A65657E
-    const tag = new TextEncoder().encode("~eez");
+    // HEADER_TAG = 0x5A45457E
+    // HEADER_TAG_COMPRESSED = 0x7A65657E
+    const tag = new TextEncoder().encode(uncompressed ? "~EEZ" : "~eez");
     dataBuffer.writeUint8Array(tag);
 
     // projectMajorVersion
@@ -1274,11 +1295,16 @@ function buildHeaderData(
     // assetsType
     dataBuffer.writeUint8(assets.projectStore.projectTypeTraits.id);
 
-    // reserved
-    dataBuffer.writeUint8(0);
+    if (uncompressed) {
+        // external
+        dataBuffer.writeUint8(0);
+    } else {
+        // reserved
+        dataBuffer.writeUint8(0);
 
-    // decompressedSize
-    dataBuffer.writeUint32(decompressedSize);
+        // decompressedSize
+        dataBuffer.writeUint32(uncompressedSize);
+    }
 
     dataBuffer.finalize();
 }
@@ -1342,8 +1368,29 @@ export async function buildGuiAssetsData(assets: Assets) {
 
     dataBuffer.finalize();
 
-    const decompressedSize = dataBuffer.size;
+    const uncompressedSize = dataBuffer.size;
 
+    //
+    const uncompressedHeaderBuffer = new DataBuffer(assets.utf8Support);
+    buildHeaderData(assets, uncompressedSize, uncompressedHeaderBuffer, true);
+
+    const uncompressedData = Buffer.alloc(
+        uncompressedHeaderBuffer.size + uncompressedSize
+    );
+    uncompressedHeaderBuffer.buffer.copy(
+        uncompressedData,
+        0,
+        0,
+        uncompressedHeaderBuffer.size
+    );
+    dataBuffer.buffer.copy(
+        uncompressedData,
+        uncompressedHeaderBuffer.size,
+        0,
+        uncompressedSize
+    );
+
+    //
     const COMPRESSION_LEVEL_FOR_DASHBOARD_PROJECTS = 1;
     const COMPRESSION_LEVEL_DEFAULT = 12;
     const { compressedBuffer, compressedSize } = await dataBuffer.compress(
@@ -1354,17 +1401,29 @@ export async function buildGuiAssetsData(assets: Assets) {
             : COMPRESSION_LEVEL_DEFAULT
     );
 
-    const headerBuffer = new DataBuffer(assets.utf8Support);
-    buildHeaderData(assets, decompressedSize, headerBuffer);
+    const compressedHeaderBuffer = new DataBuffer(assets.utf8Support);
+    buildHeaderData(assets, uncompressedSize, compressedHeaderBuffer, false);
 
-    const allData = Buffer.alloc(headerBuffer.size + compressedSize);
-    headerBuffer.buffer.copy(allData, 0, 0, headerBuffer.size);
-    compressedBuffer.copy(allData, headerBuffer.size, 0, compressedSize);
+    const compressedData = Buffer.alloc(
+        compressedHeaderBuffer.size + compressedSize
+    );
+    compressedHeaderBuffer.buffer.copy(
+        compressedData,
+        0,
+        0,
+        compressedHeaderBuffer.size
+    );
+    compressedBuffer.copy(
+        compressedData,
+        compressedHeaderBuffer.size,
+        0,
+        compressedSize
+    );
 
     assets.projectStore.outputSectionsStore.write(
         Section.OUTPUT,
         MessageType.INFO,
-        "Uncompressed size: " + decompressedSize
+        "Uncompressed size: " + uncompressedSize
     );
 
     assets.projectStore.outputSectionsStore.write(
@@ -1373,7 +1432,7 @@ export async function buildGuiAssetsData(assets: Assets) {
         "Compressed size: " + compressedSize
     );
 
-    return allData;
+    return { uncompressedData, compressedData };
 }
 
 export async function buildAssets(
@@ -1479,34 +1538,35 @@ export async function buildAssets(
         buildAssetsDataMap
     ) {
         // build all assets as single data chunk
-        const compressedAssetsData = await buildGuiAssetsData(assets);
+        const { uncompressedData, compressedData } = await buildGuiAssetsData(
+            assets
+        );
 
         if (option != "buildAssets") {
             if (buildAssetsDecl) {
-                result.GUI_ASSETS_DECL =
-                    buildGuiAssetsDecl(compressedAssetsData);
+                result.GUI_ASSETS_DECL = buildGuiAssetsDecl(uncompressedData);
             }
 
             if (buildAssetsDeclCompressed) {
                 result.GUI_ASSETS_DECL_COMPRESSED =
-                    buildGuiAssetsDecl(compressedAssetsData);
+                    buildGuiAssetsDecl(compressedData);
             }
 
             if (buildAssetsDef) {
                 result.GUI_ASSETS_DEF = await buildGuiAssetsDef(
-                    compressedAssetsData
+                    uncompressedData
                 );
             }
 
             if (buildAssetsDefCompressed) {
                 result.GUI_ASSETS_DEF_COMPRESSED = await buildGuiAssetsDef(
-                    compressedAssetsData
+                    compressedData
                 );
             }
         }
 
         if (buildAssetsData) {
-            result.GUI_ASSETS_DATA = compressedAssetsData;
+            result.GUI_ASSETS_DATA = compressedData;
         }
 
         if (buildAssetsDataMap) {

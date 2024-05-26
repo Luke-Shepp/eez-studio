@@ -12,13 +12,17 @@ import type {
 import {
     getValue,
     getArrayValue,
-    createWasmValue
+    createWasmValue,
+    getJSObjectFromID,
+    jsObjectIncRef,
+    jsObjectDecRef
 } from "project-editor/flow/runtime/wasm-value";
 
 import { DashboardComponentContext } from "project-editor/flow/runtime/worker-dashboard-component-context";
 
 import { isArray } from "eez-studio-shared/util";
 import { getLvglWasmFlowRuntimeConstructor } from "project-editor/lvgl/lvgl-versions";
+import { runInAction } from "mobx";
 
 const eez_flow_runtime_constructor = require("project-editor/flow/runtime/eez_runtime.js");
 
@@ -154,7 +158,95 @@ function executeDashboardComponent(
     }
 }
 
-function onArrayValueFree(wasmModuleId: number, ptr: number) {
+function operationJsonGet(
+    wasmModuleId: number,
+    jsObjectID: number,
+    property: string
+) {
+    let value = undefined;
+
+    const WasmFlowRuntime = getWasmFlowRuntime(wasmModuleId);
+    if (WasmFlowRuntime) {
+        value = getJSObjectFromID(jsObjectID, wasmModuleId);
+        const propertyParts = property.split(".");
+        for (let i = 0; value && i < propertyParts.length; i++) {
+            value = value[propertyParts[i]];
+        }
+    }
+
+    return createWasmValue(WasmFlowRuntime, value);
+}
+
+function operationJsonSet(
+    wasmModuleId: number,
+    jsObjectID: number,
+    property: string,
+    valuePtr: number
+) {
+    const WasmFlowRuntime = getWasmFlowRuntime(wasmModuleId);
+    if (WasmFlowRuntime) {
+        let value = getJSObjectFromID(jsObjectID, wasmModuleId);
+        const propertyParts = property.split(".");
+        for (let i = 0; value && i < propertyParts.length - 1; i++) {
+            value = value[propertyParts[i]];
+        }
+
+        if (value) {
+            runInAction(() => {
+                value[propertyParts[propertyParts.length - 1]] = getValue(
+                    WasmFlowRuntime,
+                    valuePtr
+                ).value;
+            });
+
+            return 0; // success
+        }
+    }
+
+    return 1; // error
+}
+
+function operationJsonArrayLength(wasmModuleId: number, jsObjectID: number) {
+    const WasmFlowRuntime = getWasmFlowRuntime(wasmModuleId);
+    if (WasmFlowRuntime) {
+        let value = getJSObjectFromID(jsObjectID, wasmModuleId);
+        if (value && Array.isArray(value)) {
+            return value.length; // success
+        }
+    }
+
+    return -1; // error
+}
+
+function operationJsonClone(wasmModuleId: number, jsObjectID: number) {
+    let value = undefined;
+
+    const WasmFlowRuntime = getWasmFlowRuntime(wasmModuleId);
+    if (WasmFlowRuntime) {
+        value = getJSObjectFromID(jsObjectID, wasmModuleId);
+        if (value) {
+            value = JSON.parse(JSON.stringify(value));
+        }
+    }
+
+    return createWasmValue(WasmFlowRuntime, value);
+}
+
+function dashboardObjectValueIncRef(wasmModuleId: number, jsObjectID: number) {
+    const WasmFlowRuntime = getWasmFlowRuntime(wasmModuleId);
+    if (WasmFlowRuntime) {
+        jsObjectIncRef(jsObjectID, wasmModuleId);
+    }
+}
+
+function dashboardObjectValueDecRef(wasmModuleId: number, jsObjectID: number) {
+    const WasmFlowRuntime = getWasmFlowRuntime(wasmModuleId);
+    if (WasmFlowRuntime) {
+        jsObjectDecRef(jsObjectID, wasmModuleId);
+    }
+}
+
+function onObjectArrayValueFree(wasmModuleId: number, ptr: number) {
     const WasmFlowRuntime = getWasmFlowRuntime(wasmModuleId);
     if (!WasmFlowRuntime) {
         return;
@@ -185,7 +277,13 @@ function getLvglImageByName(wasmModuleId: number, name: string) {
 (global as any).writeDebuggerBuffer = writeDebuggerBuffer;
 (global as any).finishToDebuggerMessage = finishToDebuggerMessage;
 (global as any).executeDashboardComponent = executeDashboardComponent;
-(global as any).onArrayValueFree = onArrayValueFree;
+(global as any).operationJsonGet = operationJsonGet;
+(global as any).operationJsonSet = operationJsonSet;
+(global as any).operationJsonArrayLength = operationJsonArrayLength;
+(global as any).operationJsonClone = operationJsonClone;
+(global as any).dashboardObjectValueIncRef = dashboardObjectValueIncRef;
+(global as any).dashboardObjectValueDecRef = dashboardObjectValueDecRef;
+(global as any).onObjectArrayValueFree = onObjectArrayValueFree;
 (global as any).executeScpi = executeScpi;
 (global as any).getLvglImageByName = getLvglImageByName;
 

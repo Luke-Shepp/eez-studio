@@ -51,10 +51,11 @@ import {
 
 import {
     ArrayValue,
-    clearStremIDs,
+    clearJSObjects,
     createJsArrayValue,
     createWasmValue,
-    getValue
+    getValue,
+    initJSObjectsMap
 } from "project-editor/flow/runtime/wasm-value";
 
 import {
@@ -229,6 +230,11 @@ export class WasmRuntime extends RemoteRuntime {
 
         // create WASM worker
         this.wasmModuleId = nextWasmModuleId++;
+
+        if (this.projectStore.projectTypeTraits.isDashboard) {
+            initJSObjectsMap(this.assetsMap, this.wasmModuleId);
+        }
+
         this.worker = createWasmWorker(
             this.wasmModuleId,
             isDebuggerActive
@@ -271,7 +277,7 @@ export class WasmRuntime extends RemoteRuntime {
     }
 
     async doStopRuntime(notifyUser: boolean) {
-        if (this.projectStore.context.type == "instrument-dashobard") {
+        if (this.projectStore.context.type == "instrument-dashboard") {
             notifyUser = false;
         }
 
@@ -285,7 +291,7 @@ export class WasmRuntime extends RemoteRuntime {
 
         this.destroyGlobalVariables();
 
-        clearStremIDs(this.wasmModuleId);
+        clearJSObjects(this.wasmModuleId);
 
         if (this.lgvlPageRuntime) {
             this.lgvlPageRuntime.unmount();
@@ -406,7 +412,7 @@ export class WasmRuntime extends RemoteRuntime {
 
                 if (
                     valueType != "object:Instrument" ||
-                    this.projectStore.context.type != "instrument-dashobard"
+                    this.projectStore.context.type != "instrument-dashboard"
                 ) {
                     const objectVariableType = getObjectVariableTypeFromType(
                         this.projectStore,
@@ -575,7 +581,7 @@ export class WasmRuntime extends RemoteRuntime {
             let value =
                 variable.type == "object:Instrument" &&
                 firstDashboardInstrument &&
-                this.projectStore.context.type == "instrument-dashobard"
+                this.projectStore.context.type == "instrument-dashboard"
                     ? this.projectStore.context.instrument
                     : this.projectStore.dataContext.get(variable.fullName);
 
@@ -741,14 +747,10 @@ export class WasmRuntime extends RemoteRuntime {
             const engineValuePtr = this.worker.wasm._getGlobalVariable(
                 globalVariable.globalVariableIndex
             );
+
             const engineValueWithType = getValue(
                 this.worker.wasm,
                 engineValuePtr
-            );
-
-            this.projectStore.dataContext.set(
-                globalVariable.variable.name,
-                engineValueWithType.value
             );
 
             if (globalVariable.kind == "object") {
@@ -807,8 +809,6 @@ export class WasmRuntime extends RemoteRuntime {
                     }
                 );
 
-                //console.log(oldArrayValue, newArrayValue);
-
                 if (isDifferent(oldArrayValue, newArrayValue)) {
                     // console.log(
                     //     "object global variable updated",
@@ -824,6 +824,11 @@ export class WasmRuntime extends RemoteRuntime {
 
                     globalVariable.value = newArrayValue;
                 }
+            } else {
+                this.projectStore.dataContext.set(
+                    globalVariable.variable.name,
+                    engineValueWithType.value
+                );
             }
         }
 
@@ -905,7 +910,7 @@ export class WasmRuntime extends RemoteRuntime {
 
         if (
             !instrument.isConnected &&
-            (this.projectStore.context.type != "instrument-dashobard" ||
+            (this.projectStore.context.type != "instrument-dashboard" ||
                 instrument != this.projectStore.context.instrument)
         ) {
             const CONNECTION_TIMEOUT = 3000;
@@ -1364,11 +1369,22 @@ export const WasmCanvas = observer(
 
         render() {
             const wasmRuntime = this.context.runtime as WasmRuntime;
+
             return (
                 <canvas
                     ref={this.canvasRef}
                     width={wasmRuntime.displayWidth}
                     height={wasmRuntime.displayHeight}
+                    style={
+                        this.context.project.settings.general.circularDisplay
+                            ? {
+                                  borderRadius: Math.min(
+                                      wasmRuntime.displayWidth,
+                                      wasmRuntime.displayWidth
+                                  )
+                              }
+                            : undefined
+                    }
                 />
             );
         }

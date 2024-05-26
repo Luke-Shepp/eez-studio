@@ -623,7 +623,9 @@ void doUpdateTasks() {
         } else if (updateTask.updateTaskType == UPDATE_TASK_TYPE_ROLLER_OPTIONS) {
             const char *new_val = evalStringArrayPropertyAndJoin(updateTask.flow_state, updateTask.component_index, updateTask.property_index, "Failed to evaluate Selected in Dropdown widget", "\n");
             const char *cur_val = lv_roller_get_options(updateTask.obj);
-            if (strcmp(new_val, cur_val) != 0) lv_roller_set_options(updateTask.obj, new_val, (lv_roller_mode_t)updateTask.param);
+            if (compareRollerOptions((lv_roller_t *)updateTask.obj, new_val, cur_val, (lv_roller_mode_t)updateTask.param)) {
+                lv_roller_set_options(updateTask.obj, new_val, (lv_roller_mode_t)updateTask.param);
+            }
         } else if (updateTask.updateTaskType == UPDATE_TASK_TYPE_ROLLER_SELECTED) {
             uint16_t new_val = (uint16_t)evalIntegerProperty(updateTask.flow_state, updateTask.component_index, updateTask.property_index, "Failed to evaluate Selected in Roller widget");
             uint16_t cur_val = lv_roller_get_selected(updateTask.obj);
@@ -745,12 +747,6 @@ void finishToDebuggerMessage() {
     }, eez::flow::g_wasmModuleId);
 }
 
-void onArrayValueFree(eez::ArrayValue *arrayValue) {
-    EM_ASM({
-        onArrayValueFree($0, $1);
-    }, eez::flow::g_wasmModuleId, arrayValue);
-}
-
 void replacePageHook(int16_t pageId, uint32_t animType, uint32_t speed, uint32_t delay) {
     screenLoad_animType = animType;
     screenLoad_speed = speed;
@@ -822,7 +818,6 @@ extern "C" void flowInit(uint32_t wasmModuleId, uint32_t debuggerMessageSubscipt
     eez::flow::startToDebuggerMessageHook = startToDebuggerMessage;
     eez::flow::writeDebuggerBufferHook = writeDebuggerBuffer;
     eez::flow::finishToDebuggerMessageHook = finishToDebuggerMessage;
-    eez::flow::onArrayValueFreeHook = onArrayValueFree;
     eez::flow::replacePageHook = replacePageHook;
     eez::flow::stopScriptHook = stopScript;
     eez::flow::getLvglObjectFromIndexHook = getLvglObjectFromIndex;

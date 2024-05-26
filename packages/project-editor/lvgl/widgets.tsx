@@ -39,7 +39,8 @@ import {
     propertyNotSetMessage,
     objectToClipboardData,
     clipboardDataToObject,
-    ProjectStore
+    ProjectStore,
+    updateObject
 } from "project-editor/store";
 
 import {
@@ -102,8 +103,7 @@ import {
     LV_EVENT_METER_TICK_LABEL_EVENT,
     LVGL_EVENTS,
     getExpressionPropertyInitalValue,
-    unescapeText,
-    checkProperty
+    unescapeText
 } from "project-editor/lvgl/widget-common";
 import {
     expressionPropertyBuildEventHandlerSpecific,
@@ -356,38 +356,6 @@ export class LVGLWidget extends Widget {
                 name: "identifier",
                 displayName: "Name",
                 type: PropertyType.String,
-                unique: (
-                    widget: IEezObject,
-                    parent: IEezObject,
-                    propertyInfo?: PropertyInfo
-                ) => {
-                    const oldIdentifier = propertyInfo
-                        ? getProperty(widget, propertyInfo.name)
-                        : undefined;
-
-                    return (object: any, ruleName: string) => {
-                        const newIdentifer = object[ruleName];
-                        if (
-                            oldIdentifier != undefined &&
-                            newIdentifer == oldIdentifier
-                        ) {
-                            return null;
-                        }
-
-                        if (
-                            ProjectEditor.getProjectStore(
-                                parent
-                            ).lvglIdentifiers.getIdentifierByName(
-                                ProjectEditor.getFlow(widget),
-                                newIdentifer
-                            ) == undefined
-                        ) {
-                            return null;
-                        }
-
-                        return "Not an unique name";
-                    };
-                },
                 isOptional: true,
                 propertyGridGroup: generalGroup
             },
@@ -2064,10 +2032,6 @@ export class LVGLLabelWidget extends LVGLWidget {
             </svg>
         ),
 
-        check: (widget: LVGLLabelWidget, messages: IMessage[]) => {
-            checkProperty(widget, "text", messages);
-        },
-
         lvgl: {
             parts: ["MAIN"],
             flags: [
@@ -2375,18 +2339,32 @@ const LVGLUserWidgetWidgetPropertyGridUI = observer(
             (this.props.objects[0] as LVGLUserWidgetWidget).open();
         };
 
+        fitSize = () => {
+            (this.props.objects[0] as LVGLUserWidgetWidget).fitSize();
+        };
+
         render() {
             if (this.props.objects.length > 1) {
                 return null;
             }
             return (
-                <Button
-                    color="primary"
-                    size="small"
-                    onClick={this.showUserWidgetPage}
-                >
-                    Show User Widget
-                </Button>
+                <div style={{ marginTop: 5, marginBottom: 5 }}>
+                    <Button
+                        color="primary"
+                        size="small"
+                        onClick={this.showUserWidgetPage}
+                    >
+                        Show User Widget
+                    </Button>
+                    <Button
+                        color="secondary"
+                        size="small"
+                        onClick={this.fitSize}
+                        style={{ marginLeft: 10 }}
+                    >
+                        Fit to User Widget Size
+                    </Button>
+                </div>
             );
         }
     }
@@ -2649,6 +2627,15 @@ export class LVGLUserWidgetWidget extends LVGLWidget {
         }
     }
 
+    fitSize() {
+        if (this.userWidgetPage) {
+            updateObject(this, {
+                width: this.userWidgetPage.rect.width,
+                height: this.userWidgetPage.rect.height
+            });
+        }
+    }
+
     getInputs() {
         const page = findPage(getProject(this), this.userWidgetPageName);
         if (!page) {
@@ -2809,11 +2796,19 @@ export class LVGLUserWidgetWidget extends LVGLWidget {
                 startWidgetIndex = `startWidgetIndex + ${startWidgetIndex}`;
             }
 
-            build.line(
-                `${build.getScreenCreateFunctionName(
-                    userWidgetPage
-                )}(obj, getFlowState(flowState, ${componentIndex}), ${startWidgetIndex});`
-            );
+            if (build.project.projectTypeTraits.hasFlowSupport) {
+                build.line(
+                    `${build.getScreenCreateFunctionName(
+                        userWidgetPage
+                    )}(obj, getFlowState(flowState, ${componentIndex}), ${startWidgetIndex});`
+                );
+            } else {
+                build.line(
+                    `${build.getScreenCreateFunctionName(
+                        userWidgetPage
+                    )}(obj, ${startWidgetIndex});`
+                );
+            }
         }
     }
 
@@ -2838,11 +2833,19 @@ export class LVGLUserWidgetWidget extends LVGLWidget {
                 startWidgetIndex = `startWidgetIndex + ${startWidgetIndex}`;
             }
 
-            build.line(
-                `${build.getScreenTickFunctionName(
-                    userWidgetPage
-                )}(getFlowState(flowState, ${componentIndex}), ${startWidgetIndex});`
-            );
+            if (build.project.projectTypeTraits.hasFlowSupport) {
+                build.line(
+                    `${build.getScreenTickFunctionName(
+                        userWidgetPage
+                    )}(getFlowState(flowState, ${componentIndex}), ${startWidgetIndex});`
+                );
+            } else {
+                build.line(
+                    `${build.getScreenTickFunctionName(
+                        userWidgetPage
+                    )}(${startWidgetIndex});`
+                );
+            }
         }
     }
 
@@ -6363,7 +6366,7 @@ export class LVGLMeterIndicatorNeedleImg extends LVGLMeterIndicator {
     override lvglBuild(build: LVGLBuild) {
         build.line(
             `lv_meter_indicator_t *indicator = lv_meter_add_needle_img(obj, scale, ${
-                this.image ? `&img_${this.image}` : 0
+                this.image ? `&${build.getImageVariableName(this.image)}` : 0
             }, ${this.pivotX}, ${this.pivotY});`
         );
 

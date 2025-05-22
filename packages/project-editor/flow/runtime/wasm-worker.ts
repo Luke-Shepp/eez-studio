@@ -23,6 +23,7 @@ import { DashboardComponentContext } from "project-editor/flow/runtime/worker-da
 import { isArray } from "eez-studio-shared/util";
 import { getLvglWasmFlowRuntimeConstructor } from "project-editor/lvgl/lvgl-versions";
 import { runInAction } from "mobx";
+import deepEqual from "fast-deep-equal";
 
 const eez_flow_runtime_constructor = require("project-editor/flow/runtime/eez_runtime.js");
 
@@ -161,16 +162,35 @@ function executeDashboardComponent(
 function operationJsonGet(
     wasmModuleId: number,
     jsObjectID: number,
-    property: string
+    propertyName: string
 ) {
     let value = undefined;
 
     const WasmFlowRuntime = getWasmFlowRuntime(wasmModuleId);
     if (WasmFlowRuntime) {
         value = getJSObjectFromID(jsObjectID, wasmModuleId);
-        const propertyParts = property.split(".");
-        for (let i = 0; value && i < propertyParts.length; i++) {
-            value = value[propertyParts[i]];
+
+        const path = [];
+        let part = "";
+
+        for (let i = 0; i < propertyName.length; i++) {
+            const ch = propertyName[i];
+            if (ch == "\\") {
+                i++;
+                if (i < propertyName.length) {
+                    part += propertyName[i];
+                }
+            } else if (ch == ".") {
+                path.push(part);
+                part = "";
+            } else {
+                part += ch;
+            }
+        }
+        path.push(part);
+
+        for (let i = 0; value && i < path.length; i++) {
+            value = value[path[i]];
         }
     }
 
@@ -218,6 +238,98 @@ function operationJsonArrayLength(wasmModuleId: number, jsObjectID: number) {
     return -1; // error
 }
 
+function operationJsonArraySlice(
+    wasmModuleId: number,
+    jsObjectID: number,
+    from: number,
+    to: number
+) {
+    const WasmFlowRuntime = getWasmFlowRuntime(wasmModuleId);
+    if (WasmFlowRuntime) {
+        let array = getJSObjectFromID(jsObjectID, wasmModuleId);
+        if (array && Array.isArray(array)) {
+            if (to == -1) {
+                to = array.length;
+            }
+
+            return createWasmValue(WasmFlowRuntime, array.slice(from, to));
+        }
+    }
+
+    return createWasmValue(WasmFlowRuntime, Error()); // error
+}
+
+function operationJsonArrayAppend(
+    wasmModuleId: number,
+    jsObjectID: number,
+    valuePtr: number
+) {
+    const WasmFlowRuntime = getWasmFlowRuntime(wasmModuleId);
+    if (WasmFlowRuntime) {
+        let array = getJSObjectFromID(jsObjectID, wasmModuleId);
+        if (array && Array.isArray(array)) {
+            return createWasmValue(WasmFlowRuntime, [
+                ...array,
+                getValue(WasmFlowRuntime, valuePtr).value
+            ]);
+        }
+    }
+
+    return createWasmValue(WasmFlowRuntime, Error()); // error
+}
+
+function operationJsonArrayInsert(
+    wasmModuleId: number,
+    jsObjectID: number,
+    position: number,
+    valuePtr: number
+) {
+    const WasmFlowRuntime = getWasmFlowRuntime(wasmModuleId);
+    if (WasmFlowRuntime) {
+        let array = getJSObjectFromID(jsObjectID, wasmModuleId);
+        if (array && Array.isArray(array)) {
+            if (position < 0) {
+                position = 0;
+            } else if (position > array.length) {
+                position = array.length;
+            }
+
+            const newArray = [
+                ...array.slice(0, position),
+                getValue(WasmFlowRuntime, valuePtr).value,
+                ...array.slice(position)
+            ];
+
+            return createWasmValue(WasmFlowRuntime, newArray);
+        }
+    }
+
+    return createWasmValue(WasmFlowRuntime, Error()); // error
+}
+
+function operationJsonArrayRemove(
+    wasmModuleId: number,
+    jsObjectID: number,
+    position: number
+) {
+    const WasmFlowRuntime = getWasmFlowRuntime(wasmModuleId);
+    if (WasmFlowRuntime) {
+        let array = getJSObjectFromID(jsObjectID, wasmModuleId);
+        if (array && Array.isArray(array)) {
+            if (position >= 0 && position < array.length) {
+                const newArray = [
+                    ...array.slice(0, position),
+                    ...array.slice(position + 1)
+                ];
+
+                return createWasmValue(WasmFlowRuntime, newArray);
+            }
+        }
+    }
+
+    return createWasmValue(WasmFlowRuntime, Error()); // error
+}
+
 function operationJsonClone(wasmModuleId: number, jsObjectID: number) {
     let value = undefined;
 
@@ -227,6 +339,117 @@ function operationJsonClone(wasmModuleId: number, jsObjectID: number) {
         if (value) {
             value = JSON.parse(JSON.stringify(value));
         }
+    }
+
+    return createWasmValue(WasmFlowRuntime, value);
+}
+
+function operationJsonMake(wasmModuleId: number) {
+    const WasmFlowRuntime = getWasmFlowRuntime(wasmModuleId);
+    return createWasmValue(WasmFlowRuntime, {});
+}
+
+function operationStringFormat(
+    wasmModuleId: number,
+    format: string,
+    paramValuePtr: number
+) {
+    const WasmFlowRuntime = getWasmFlowRuntime(wasmModuleId);
+    if (WasmFlowRuntime) {
+        const param = getValue(WasmFlowRuntime, paramValuePtr).value;
+        try {
+            const result = (window as any).d3.format(format)(param);
+            return createWasmValue(WasmFlowRuntime, result);
+        } catch (err) {}
+    }
+
+    return createWasmValue(WasmFlowRuntime, Error()); // error
+}
+
+function operationStringFormatPrefix(
+    wasmModuleId: number,
+    format: string,
+    valueValuePtr: number,
+    paramValuePtr: number
+) {
+    const WasmFlowRuntime = getWasmFlowRuntime(wasmModuleId);
+    if (WasmFlowRuntime) {
+        console.log(format);
+        const value = getValue(WasmFlowRuntime, valueValuePtr).value;
+        console.log(value);
+        const param = getValue(WasmFlowRuntime, paramValuePtr).value;
+        console.log(param);
+        try {
+            const result = (window as any).d3.formatPrefix(
+                format,
+                value
+            )(param);
+            console.log(result);
+            return createWasmValue(WasmFlowRuntime, result);
+        } catch (err) {
+            console.error(err);
+        }
+    }
+
+    return createWasmValue(WasmFlowRuntime, Error()); // error
+}
+
+function convertFromJson(
+    wasmModuleId: number,
+    jsObjectID: number,
+    toValueTypeIndex: number
+) {
+    let value = undefined;
+
+    const WasmFlowRuntime = getWasmFlowRuntime(wasmModuleId);
+    if (WasmFlowRuntime) {
+        value = getJSObjectFromID(jsObjectID, wasmModuleId);
+    }
+
+    return createWasmValue(WasmFlowRuntime, value, toValueTypeIndex);
+}
+
+function convertToJson(wasmModuleId: number, valuePtr: number) {
+    const WasmFlowRuntime = getWasmFlowRuntime(wasmModuleId);
+
+    return createWasmValue(
+        WasmFlowRuntime,
+        getValue(WasmFlowRuntime, valuePtr).value,
+        +WasmFlowRuntime.assetsMap.typeIndexes["json"]
+    );
+}
+
+function getObjectVariableMemberValue(
+    wasmModuleId: number,
+    arrayValuePtr: number,
+    memberIndex: number
+) {
+    let value = undefined;
+
+    const WasmFlowRuntime = getWasmFlowRuntime(wasmModuleId);
+    if (WasmFlowRuntime) {
+        value = WasmFlowRuntime.postWorkerToRendererMessage({
+            getObjectVariableMemberValue: { arrayValuePtr, memberIndex }
+        });
+    }
+
+    return createWasmValue(WasmFlowRuntime, value);
+}
+
+function operationBlobToString(
+    wasmModuleId: number,
+    blobPtr: number,
+    len: number
+) {
+    let value = undefined;
+
+    const WasmFlowRuntime = getWasmFlowRuntime(wasmModuleId);
+    if (WasmFlowRuntime) {
+        value = Buffer.from(
+            WasmFlowRuntime.HEAP8.buffer,
+            blobPtr,
+            len
+        ).toString("utf8");
     }
 
     return createWasmValue(WasmFlowRuntime, value);
@@ -247,6 +470,8 @@ function dashboardObjectValueDecRef(wasmModuleId: number, jsObjectID: number) {
 }
 
 function onObjectArrayValueFree(wasmModuleId: number, ptr: number) {
+    console.log("onObjectArrayValueFree", wasmModuleId, ptr);
+
     const WasmFlowRuntime = getWasmFlowRuntime(wasmModuleId);
     if (!WasmFlowRuntime) {
         return;
@@ -260,6 +485,72 @@ function onObjectArrayValueFree(wasmModuleId: number, ptr: number) {
     setTimeout(() => WasmFlowRuntime.postWorkerToRendererMessage(data));
 }
 
+function getBitmapAsDataURL(wasmModuleId: number, name: string) {
+    let dataURL: string | null = null;
+
+    const WasmFlowRuntime = getWasmFlowRuntime(wasmModuleId);
+    if (WasmFlowRuntime) {
+        dataURL = WasmFlowRuntime.postWorkerToRendererMessage({
+            getBitmapAsDataURL: { name }
+        });
+    }
+
+    return createWasmValue(WasmFlowRuntime, dataURL);
+}
+
+function setDashboardColorTheme(wasmModuleId: number, themeName: string) {
+    const WasmFlowRuntime = getWasmFlowRuntime(wasmModuleId);
+    if (WasmFlowRuntime) {
+        WasmFlowRuntime.postWorkerToRendererMessage({
+            setDashboardColorTheme: { themeName }
+        });
+    }
+}
+
+function getLvglScreenByName(wasmModuleId: number, name: string) {
+    const WasmFlowRuntime = getWasmFlowRuntime(wasmModuleId);
+    if (!WasmFlowRuntime) {
+        return;
+    }
+
+    return WasmFlowRuntime.postWorkerToRendererMessage({
+        getLvglScreenByName: { name }
+    });
+}
+
+function getLvglObjectByName(wasmModuleId: number, name: string) {
+    const WasmFlowRuntime = getWasmFlowRuntime(wasmModuleId);
+    if (!WasmFlowRuntime) {
+        return;
+    }
+
+    return WasmFlowRuntime.postWorkerToRendererMessage({
+        getLvglObjectByName: { name }
+    });
+}
+
+function getLvglGroupByName(wasmModuleId: number, name: string) {
+    const WasmFlowRuntime = getWasmFlowRuntime(wasmModuleId);
+    if (!WasmFlowRuntime) {
+        return;
+    }
+
+    return WasmFlowRuntime.postWorkerToRendererMessage({
+        getLvglGroupByName: { name }
+    });
+}
+
+function getLvglStyleByName(wasmModuleId: number, name: string) {
+    const WasmFlowRuntime = getWasmFlowRuntime(wasmModuleId);
+    if (!WasmFlowRuntime) {
+        return;
+    }
+
+    return WasmFlowRuntime.postWorkerToRendererMessage({
+        getLvglStyleByName: { name }
+    });
+}
+
 function getLvglImageByName(wasmModuleId: number, name: string) {
     const WasmFlowRuntime = getWasmFlowRuntime(wasmModuleId);
     if (!WasmFlowRuntime) {
@@ -268,6 +559,100 @@ function getLvglImageByName(wasmModuleId: number, name: string) {
 
     return WasmFlowRuntime.postWorkerToRendererMessage({
         getLvglImageByName: { name }
+    });
+}
+
+function lvglObjAddStyle(
+    wasmModuleId: number,
+    targetObj: number,
+    styleIndex: number
+) {
+    const WasmFlowRuntime = getWasmFlowRuntime(wasmModuleId);
+    if (!WasmFlowRuntime) {
+        return;
+    }
+
+    WasmFlowRuntime.postWorkerToRendererMessage({
+        lvglObjAddStyle: { targetObj, styleIndex }
+    });
+}
+
+function lvglObjRemoveStyle(
+    wasmModuleId: number,
+    targetObj: number,
+    styleIndex: number
+) {
+    const WasmFlowRuntime = getWasmFlowRuntime(wasmModuleId);
+    if (!WasmFlowRuntime) {
+        return;
+    }
+
+    WasmFlowRuntime.postWorkerToRendererMessage({
+        lvglObjRemoveStyle: { targetObj, styleIndex }
+    });
+}
+
+function lvglSetColorTheme(wasmModuleId: number, themeName: string) {
+    const WasmFlowRuntime = getWasmFlowRuntime(wasmModuleId);
+    if (!WasmFlowRuntime) {
+        return;
+    }
+
+    WasmFlowRuntime.postWorkerToRendererMessage({
+        lvglSetColorTheme: { themeName }
+    });
+}
+
+function lvglCreateScreen(wasmModuleId: number, screenIndex: number) {
+    const WasmFlowRuntime = getWasmFlowRuntime(wasmModuleId);
+    if (!WasmFlowRuntime) {
+        return;
+    }
+
+    WasmFlowRuntime.postWorkerToRendererMessage({
+        lvglCreateScreen: { screenIndex }
+    });
+}
+
+function lvglDeleteScreen(wasmModuleId: number, screenIndex: number) {
+    const WasmFlowRuntime = getWasmFlowRuntime(wasmModuleId);
+    if (!WasmFlowRuntime) {
+        return;
+    }
+
+    WasmFlowRuntime.postWorkerToRendererMessage({
+        lvglDeleteScreen: { screenIndex }
+    });
+}
+
+function lvglScreenTick(wasmModuleId: number) {
+    const WasmFlowRuntime = getWasmFlowRuntime(wasmModuleId);
+    if (!WasmFlowRuntime) {
+        return;
+    }
+
+    WasmFlowRuntime.postWorkerToRendererMessage({
+        lvglScreenTick: {}
+    });
+}
+
+function lvglOnEventHandler(
+    wasmModuleId: number,
+    obj: number,
+    eventCode: number,
+    event: number
+) {
+    const WasmFlowRuntime = getWasmFlowRuntime(wasmModuleId);
+    if (!WasmFlowRuntime) {
+        return;
+    }
+
+    WasmFlowRuntime.postWorkerToRendererMessage({
+        lvglOnEventHandler: {
+            obj,
+            eventCode,
+            event
+        }
     });
 }
 
@@ -280,12 +665,36 @@ function getLvglImageByName(wasmModuleId: number, name: string) {
 (global as any).operationJsonGet = operationJsonGet;
 (global as any).operationJsonSet = operationJsonSet;
 (global as any).operationJsonArrayLength = operationJsonArrayLength;
+(global as any).operationJsonArraySlice = operationJsonArraySlice;
+(global as any).operationJsonArrayAppend = operationJsonArrayAppend;
+(global as any).operationJsonArrayInsert = operationJsonArrayInsert;
+(global as any).operationJsonArrayRemove = operationJsonArrayRemove;
 (global as any).operationJsonClone = operationJsonClone;
+(global as any).operationJsonMake = operationJsonMake;
+(global as any).operationStringFormat = operationStringFormat;
+(global as any).operationStringFormatPrefix = operationStringFormatPrefix;
+(global as any).convertFromJson = convertFromJson;
+(global as any).convertToJson = convertToJson;
+(global as any).getObjectVariableMemberValue = getObjectVariableMemberValue;
+(global as any).operationBlobToString = operationBlobToString;
 (global as any).dashboardObjectValueIncRef = dashboardObjectValueIncRef;
 (global as any).dashboardObjectValueDecRef = dashboardObjectValueDecRef;
 (global as any).onObjectArrayValueFree = onObjectArrayValueFree;
+(global as any).getBitmapAsDataURL = getBitmapAsDataURL;
+(global as any).setDashboardColorTheme = setDashboardColorTheme;
 (global as any).executeScpi = executeScpi;
+(global as any).getLvglScreenByName = getLvglScreenByName;
+(global as any).getLvglObjectByName = getLvglObjectByName;
+(global as any).getLvglGroupByName = getLvglGroupByName;
+(global as any).getLvglStyleByName = getLvglStyleByName;
 (global as any).getLvglImageByName = getLvglImageByName;
+(global as any).lvglObjAddStyle = lvglObjAddStyle;
+(global as any).lvglObjRemoveStyle = lvglObjRemoveStyle;
+(global as any).lvglSetColorTheme = lvglSetColorTheme;
+(global as any).lvglCreateScreen = lvglCreateScreen;
+(global as any).lvglDeleteScreen = lvglDeleteScreen;
+(global as any).lvglScreenTick = lvglScreenTick;
+(global as any).lvglOnEventHandler = lvglOnEventHandler;
 
 ////////////////////////////////////////////////////////////////////////////////
 
@@ -296,9 +705,15 @@ export function createWasmWorker(
     lvglVersion: "8.3" | "9.0" | undefined,
     displayWidth: number,
     displayHeight: number,
+    darkTheme: boolean,
+    screensLifetimeSupport: boolean,
     getClassByName: (className: string) => any,
     readSettings: (key: string) => any,
     writeSettings: (key: string, value: any) => any,
+    hasWidgetHandle: (
+        flowStateIndex: number,
+        componentIndex: number
+    ) => boolean,
     getWidgetHandle: (flowStateIndex: number, componentIndex: number) => number,
     getWidgetHandleInfo: (widgetHandle: number) =>
         | {
@@ -324,6 +739,7 @@ export function createWasmWorker(
     WasmFlowRuntime.getClassByName = getClassByName;
     WasmFlowRuntime.readSettings = readSettings;
     WasmFlowRuntime.writeSettings = writeSettings;
+    WasmFlowRuntime.hasWidgetHandle = hasWidgetHandle;
     WasmFlowRuntime.getWidgetHandle = getWidgetHandle;
     WasmFlowRuntime.getWidgetHandleInfo = getWidgetHandleInfo;
 
@@ -401,25 +817,8 @@ export function createWasmWorker(
                 if (oldValue.length != newValue.length) {
                     return false;
                 }
-
-                for (let i = 0; i < oldValue.length; i++) {
-                    if (
-                        typeof newValue[i] == "object" &&
-                        typeof oldValue[i] == "object"
-                    ) {
-                        // optimization: skip deep comparison of object elements
-                        continue;
-                    }
-                    if (newValue[i] != oldValue[i]) {
-                        return false;
-                    }
-                }
-
-                return true;
             }
 
-            const deepEqual =
-                require("deep-equal") as typeof import("deep-equal");
             return deepEqual(oldValue, newValue);
         }
 
@@ -551,7 +950,9 @@ export function createWasmWorker(
                 assets.length,
                 displayWidth,
                 displayHeight,
-                -(new Date().getTimezoneOffset() / 60) * 100
+                darkTheme,
+                -(new Date().getTimezoneOffset() / 60) * 100,
+                screensLifetimeSupport
             );
 
             WasmFlowRuntime._free(ptr);
@@ -563,13 +964,10 @@ export function createWasmWorker(
         }
 
         if (rendererToWorkerMessage.wheel) {
-            if (
-                rendererToWorkerMessage.wheel.deltaY != 0 ||
-                rendererToWorkerMessage.wheel.clicked != 0
-            ) {
+            if (rendererToWorkerMessage.wheel.updated) {
                 WasmFlowRuntime._onMouseWheelEvent(
                     rendererToWorkerMessage.wheel.deltaY,
-                    rendererToWorkerMessage.wheel.clicked
+                    rendererToWorkerMessage.wheel.pressed
                 );
             }
         }
@@ -589,6 +987,17 @@ export function createWasmWorker(
             }
         }
 
+        if (rendererToWorkerMessage.keysPressed) {
+            for (
+                let i = 0;
+                i < rendererToWorkerMessage.keysPressed.length;
+                i++
+            ) {
+                const key = rendererToWorkerMessage.keysPressed[i];
+                WasmFlowRuntime._onKeyPressed(key);
+            }
+        }
+
         if (rendererToWorkerMessage.updateGlobalVariableValues) {
             updateObjectGlobalVariableValues(
                 WasmFlowRuntime,
@@ -600,6 +1009,10 @@ export function createWasmWorker(
 
         let propertyValues: IPropertyValue[] | undefined;
         if (rendererToWorkerMessage.evalProperties) {
+            const MAX_ITERATORS = 4;
+            const iteratorsPtr = WasmFlowRuntime._malloc(MAX_ITERATORS * 4);
+            const iteratorsOffset = iteratorsPtr >> 2;
+
             rendererToWorkerMessage.evalProperties.forEach(evalProperty => {
                 const {
                     flowStateIndex,
@@ -609,30 +1022,26 @@ export function createWasmWorker(
                     indexes
                 } = evalProperty;
 
-                let iteratorsPtr = 0;
+                let iteratorsPtrTemp = 0;
                 if (indexes) {
-                    const MAX_ITERATORS = 4;
-
-                    const arr = new Uint32Array(MAX_ITERATORS);
-                    for (let i = 0; i < MAX_ITERATORS; i++) {
-                        arr[i] =
-                            indexes.length < MAX_ITERATORS ? indexes[i] : 0;
+                    for (let i = 0; i < indexes.length; i++) {
+                        WasmFlowRuntime.HEAP32[iteratorsOffset + i] =
+                            indexes[i];
                     }
-                    iteratorsPtr = WasmFlowRuntime._malloc(MAX_ITERATORS * 4);
-                    WasmFlowRuntime.HEAP32.set(arr, iteratorsPtr >> 2);
+
+                    for (let i = indexes.length; i < MAX_ITERATORS; i++) {
+                        WasmFlowRuntime.HEAP32[iteratorsOffset + i] = 0;
+                    }
+                    iteratorsPtrTemp = iteratorsPtr;
                 }
 
                 const valuePtr = WasmFlowRuntime._evalProperty(
                     flowStateIndex,
                     componentIndex,
                     propertyIndex,
-                    iteratorsPtr,
+                    iteratorsPtrTemp,
                     true
                 );
-
-                if (iteratorsPtr) {
-                    WasmFlowRuntime._free(iteratorsPtr);
-                }
 
                 let propertyValue: IPropertyValue;
 
@@ -662,6 +1071,10 @@ export function createWasmWorker(
                     propertyValues.push(propertyValue);
                 }
             });
+
+            if (iteratorsPtr) {
+                WasmFlowRuntime._free(iteratorsPtr);
+            }
         } else {
             savedPropertyValues.clear();
         }

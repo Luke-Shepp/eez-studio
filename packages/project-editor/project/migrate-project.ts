@@ -104,6 +104,9 @@ function removeFlowSupport(project: Project) {
             // remove all local variables
             projectStore.deleteObjects(action.localVariables);
 
+            // remove all user properties
+            projectStore.deleteObjects(action.userProperties);
+
             // set as native
             projectStore.updateObject(action, {
                 implementationType: "native"
@@ -126,6 +129,9 @@ function removeFlowSupport(project: Project) {
         // remove all local variables
         projectStore.deleteObjects(page.localVariables);
 
+        // remove all user properties
+        projectStore.deleteObjects(page.userProperties);
+
         if (projectStore.projectTypeTraits.isLVGL) {
             // set all event handlers for LVGL widgets to "action"
             page._lvglWidgets.forEach(lvglWidget => {
@@ -139,6 +145,17 @@ function removeFlowSupport(project: Project) {
             });
         }
     });
+
+    // remove timeline in widgets
+    for (const object of visitObjects(project)) {
+        if (object instanceof ProjectEditor.WidgetClass) {
+            if (object.timeline.length > 0) {
+                projectStore.updateObject(object, {
+                    timeline: []
+                });
+            }
+        }
+    }
 
     // set all globalVariables as native
     project.variables.globalVariables.forEach(globalVariable => {

@@ -90,6 +90,7 @@ import { LVGLIdentifiers } from "project-editor/lvgl/identifiers";
 import { OpenProjectsManager } from "project-editor/store/open-projects-manager";
 import { ActionComponent } from "project-editor/flow/component";
 import {
+    AssetsMap,
     IActionComponentDefinition,
     IObjectVariableType
 } from "eez-studio-types";
@@ -100,6 +101,17 @@ import {
 import { showGenericDialog } from "eez-studio-ui/generic-dialog";
 import { validators } from "eez-studio-shared/validation";
 import { isValidUrl } from "project-editor/core/util";
+import { reflectLvglVersion } from "project-editor/lvgl/page-runtime";
+import {
+    canPasteWithDependencies,
+    pasteWithDependencies
+} from "project-editor/store/paste-with-dependencies";
+import {
+    getScrapbookItemTabTitle,
+    isScrapbookItemFilePath,
+    setScrapbookItemEezProject
+} from "./scrapbook";
+import { confirm } from "eez-studio-ui/dialog-electron";
 
 ////////////////////////////////////////////////////////////////////////////////
 
@@ -161,6 +173,9 @@ export class ProjectStore {
 
     savedRevision: symbol;
     lastRevision: symbol;
+    lastRevisionStable: symbol;
+
+    lastSuccessfulBuildRevision: symbol | undefined;
 
     filePath: string | undefined;
     backgroundCheckEnabled = true;
@@ -200,7 +215,10 @@ export class ProjectStore {
 
     constructor(public context: ProjectStoreContext) {
         if (this.context.type == "project-editor") {
-            this.savedRevision = this.lastRevision = Symbol();
+            this.savedRevision =
+                this.lastRevision =
+                this.lastRevisionStable =
+                    Symbol();
             this.undoManager = new UndoManager(this);
             this.navigationStore = new NavigationStore(this);
 
@@ -232,8 +250,11 @@ export class ProjectStore {
             masterProject: computed,
             savedRevision: observable,
             lastRevision: observable,
+            lastRevisionStable: observable,
+            lastSuccessfulBuildRevision: observable,
             isModified: computed,
             setModified: action,
+            updateLastRevisionStable: action,
             setProject: action,
             setEditorMode: action,
             onSetEditorMode: action,
@@ -288,19 +309,22 @@ export class ProjectStore {
                         } else {
                             this.onSetRuntimeMode();
                         }
+                        return false;
                     }
                 } else {
                     this.onSetRuntimeMode();
+                    return false;
                 }
             }
-            return false;
+            return true;
         });
 
         Mousetrap.bind("shift+f5", () => {
             if (this.runtime) {
                 this.onSetEditorMode();
+                return false;
             }
-            return false;
+            return true;
         });
 
         Mousetrap.bind("ctrl+f5", () => {
@@ -310,9 +334,10 @@ export class ProjectStore {
             ) {
                 if (!this.runtime || !this.runtime.isDebuggerActive) {
                     this.onSetDebuggerMode();
+                    return false;
                 }
             }
-            return false;
+            return true;
         });
 
         Mousetrap.bind("f6", () => {
@@ -322,8 +347,9 @@ export class ProjectStore {
                 !this.runtime.isPaused
             ) {
                 this.runtime.pause();
+                return false;
             }
-            return false;
+            return true;
         });
 
         Mousetrap.bind("f10", () => {
@@ -333,8 +359,9 @@ export class ProjectStore {
                 this.runtime.isPaused
             ) {
                 this.runtime.runSingleStep("step-over");
+                return false;
             }
-            return false;
+            return true;
         });
 
         Mousetrap.bind("f11", () => {
@@ -344,8 +371,9 @@ export class ProjectStore {
                 this.runtime.isPaused
             ) {
                 this.runtime.runSingleStep("step-into");
+                return false;
             }
-            return false;
+            return true;
         });
 
         Mousetrap.bind("shift+f11", () => {
@@ -355,8 +383,9 @@ export class ProjectStore {
                 this.runtime.isPaused
             ) {
                 this.runtime.runSingleStep("step-out");
+                return false;
             }
-            return false;
+            return true;
         });
     }
 
@@ -494,6 +523,10 @@ export class ProjectStore {
 
     get title() {
         if (this.filePath) {
+            if (isScrapbookItemFilePath(this.filePath)) {
+                return getScrapbookItemTabTitle(this.filePath);
+            }
+
             if (this.filePath.endsWith(".eez-project")) {
                 return path.basename(this.filePath, ".eez-project");
             } else {
@@ -539,12 +572,14 @@ export class ProjectStore {
             return;
         }
 
-        ipcRenderer.send("setMruFilePath", {
-            filePath: this.filePath,
-            projectType: this.project?.settings?.general?.projectType,
-            hasFlowSupport:
-                this.project?.projectTypeTraits.hasFlowSupport ?? false
-        });
+        if (this.filePath && !isScrapbookItemFilePath(this.filePath)) {
+            ipcRenderer.send("setMruFilePath", {
+                filePath: this.filePath,
+                projectType: this.project?.settings?.general?.projectType,
+                hasFlowSupport:
+                    this.project?.projectTypeTraits.hasFlowSupport ?? false
+            });
+        }
     }
 
     getFilePathRelativeToProjectPath(absoluteFilePath: string) {
@@ -700,6 +735,10 @@ export class ProjectStore {
         await this.setProject(project, filePath);
 
         this.openProjectsManager.mount();
+
+        if (this.projectTypeTraits.isLVGL) {
+            reflectLvglVersion(this.project);
+        }
     }
 
     async saveModified() {
@@ -755,7 +794,10 @@ export class ProjectStore {
                 LayoutModels.OUTPUT_TAB_ID
             );
         } else {
-            notification.info("Build done.");
+            runInAction(() => {
+                this.lastSuccessfulBuildRevision = this.lastRevisionStable;
+            });
+            notification.info("Build successful.", { autoClose: 1000 });
         }
         return result;
     }
@@ -869,8 +911,18 @@ export class ProjectStore {
 
     setModified(revision: symbol) {
         const previousRevision = this.lastRevision;
+
         this.lastRevision = revision;
+
+        if (this.undoManager && !this.undoManager.combineCommands) {
+            this.lastRevisionStable = this.lastRevision;
+        }
+
         return previousRevision;
+    }
+
+    updateLastRevisionStable() {
+        this.lastRevisionStable = this.lastRevision;
     }
 
     async setProject(project: Project, projectFilePath: string | undefined) {
@@ -1157,9 +1209,14 @@ export class ProjectStore {
         this.editorsStore?.refresh(true);
     }
 
-    async setEditorMode() {
+    async setEditorMode(force: boolean = false) {
         if (this.debounceChangeRuntimeMode()) {
-            return;
+            if (force) {
+                clearTimeout(this.changingRuntimeMode);
+                this.changingRuntimeMode = undefined;
+            } else {
+                return;
+            }
         }
 
         if (this.runtime) {
@@ -1385,6 +1442,138 @@ export class ProjectStore {
     get isScpiInstrument() {
         return this.project.scpi != undefined;
     }
+
+    get canCut() {
+        return (
+            this.navigationStore.selectedPanel &&
+            this.navigationStore.selectedPanel.cutSelection &&
+            this.navigationStore.selectedPanel.canCut!()
+        );
+    }
+
+    cut = () => {
+        if (
+            this.navigationStore.selectedPanel &&
+            this.navigationStore.selectedPanel.cutSelection
+        ) {
+            this.navigationStore.selectedPanel.cutSelection();
+        }
+    };
+
+    get canCopy() {
+        return (
+            this.navigationStore.selectedPanel &&
+            this.navigationStore.selectedPanel.copySelection &&
+            this.navigationStore.selectedPanel.canCopy!()
+        );
+    }
+
+    copy = () => {
+        if (!this.canCopy) {
+            return;
+        }
+        if (
+            this.navigationStore.selectedPanel &&
+            this.navigationStore.selectedPanel.copySelection
+        ) {
+            this.navigationStore.selectedPanel.copySelection();
+        }
+    };
+
+    get canPaste() {
+        return (
+            canPasteWithDependencies(this) ||
+            (this.navigationStore.selectedPanel &&
+                this.navigationStore.selectedPanel.pasteSelection &&
+                this.navigationStore.selectedPanel.canPaste!())
+        );
+    }
+
+    paste = () => {
+        const pasteToSelectedPanel = () => {
+            if (
+                this.navigationStore.selectedPanel &&
+                this.navigationStore.selectedPanel.pasteSelection
+            ) {
+                this.navigationStore.selectedPanel.pasteSelection();
+            }
+        };
+
+        if (canPasteWithDependencies(this)) {
+            confirm(
+                "Do you want to paste with all the dependencies?",
+                "Clipboard content is from the different project.",
+                () => pasteWithDependencies(this),
+                () => pasteToSelectedPanel()
+            );
+        } else {
+            pasteToSelectedPanel();
+        }
+    };
+
+    async findProjectComponent() {
+        if (this.runtime && !this.runtime.isDebuggerActive) {
+            return;
+        }
+
+        const result = await showGenericDialog({
+            dialogDefinition: {
+                title: "Find Project Component",
+                fields: [
+                    {
+                        name: "componentPath",
+                        type: "string",
+                        validators: [validators.required]
+                    }
+                ]
+            },
+            values: {
+                componentPath: ""
+            }
+        });
+
+        const progressToastId = notification.info("Searching...", {
+            autoClose: false
+        });
+
+        const [flowIndex, componentIndex] =
+            result.values.componentPath.split(".");
+
+        const buildResult = await this.buildAssets();
+        const assetsMap = buildResult.GUI_ASSETS_DATA_MAP_JS as AssetsMap;
+
+        if (flowIndex >= 0 && flowIndex < assetsMap.flows.length) {
+            const flow = assetsMap.flows[flowIndex];
+            if (componentIndex >= 0 && flow.components.length) {
+                const flowComponent = flow.components[componentIndex];
+                const component = getObjectFromStringPath(
+                    this.project,
+                    flowComponent.path
+                );
+                if (component) {
+                    this.navigationStore.showObjects(
+                        [component],
+                        true,
+                        true,
+                        true
+                    );
+
+                    notification.update(progressToastId, {
+                        render: "Found.",
+                        type: notification.SUCCESS,
+                        autoClose: 1000
+                    });
+                    return;
+                }
+            }
+        }
+
+        notification.update(progressToastId, {
+            render: "Not found.",
+            type: notification.ERROR,
+            autoClose: false
+        });
+    }
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -1410,6 +1599,17 @@ export function getJSON(projectStore: ProjectStore, tabWidth: number = 2) {
 
 export function save(projectStore: ProjectStore, filePath: string) {
     const json = getJSON(projectStore);
+
+    if (isScrapbookItemFilePath(filePath)) {
+        return new Promise<void>((resolve, reject) => {
+            try {
+                setScrapbookItemEezProject(filePath, json);
+                resolve();
+            } catch (err) {
+                reject(err);
+            }
+        });
+    }
 
     return new Promise<void>((resolve, reject) => {
         fs.writeFile(filePath, json, "utf8", (err: any) => {

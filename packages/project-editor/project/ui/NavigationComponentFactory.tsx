@@ -1,4 +1,4 @@
-import { action } from "mobx";
+import { action, runInAction } from "mobx";
 
 import { IEezObject } from "project-editor/core/object";
 
@@ -32,6 +32,7 @@ import { ConnectionLine } from "project-editor/flow/connection-line";
 import { Language, TextResource } from "project-editor/features/texts";
 import { LVGLStyle } from "project-editor/lvgl/style";
 import { NavigationStore } from "project-editor/store/navigation";
+import { ProjectEditor } from "project-editor/project-editor-interface";
 
 export function getNavigationObject(
     object: IEezObject
@@ -146,12 +147,51 @@ export const navigateTo = action((object: IEezObject) => {
 
     let ancestor;
 
-    ancestor = getAncestorOfType(object, Page.classInfo);
+    ancestor = getAncestorOfType(object, Variable.classInfo);
     if (ancestor) {
+        const isLocal = ProjectEditor.getFlow(object) != undefined;
+
         projectStore.layoutModels.selectTab(
             projectStore.layoutModels.root,
-            LayoutModels.PAGES_TAB_ID
+            LayoutModels.VARIABLES_TAB_ID
         );
+
+        projectStore.navigationStore.subnavigationSelectedItems[
+            NavigationStore.VARIABLES_SUB_NAVIGATION_ID
+        ] = isLocal
+            ? NavigationStore.VARIABLES_SUB_NAVIGATION_ITEM_LOCAL
+            : NavigationStore.VARIABLES_SUB_NAVIGATION_ITEM_GLOBAL;
+
+        if (object instanceof Variable) {
+            runInAction(() => {
+                if (isLocal) {
+                    projectStore.navigationStore.selectedLocalVariable.set(
+                        object
+                    );
+                } else {
+                    projectStore.navigationStore.selectedGlobalVariableObject.set(
+                        object
+                    );
+                }
+            });
+        }
+
+        return;
+    }
+
+    ancestor = getAncestorOfType(object, Page.classInfo) as Page;
+    if (ancestor) {
+        if (ancestor.isUsedAsUserWidget) {
+            projectStore.layoutModels.selectTab(
+                projectStore.layoutModels.root,
+                LayoutModels.USER_WIDGETS_TAB_ID
+            );
+        } else {
+            projectStore.layoutModels.selectTab(
+                projectStore.layoutModels.root,
+                LayoutModels.PAGES_TAB_ID
+            );
+        }
 
         const variable = getAncestorOfType(object, Variable.classInfo);
         if (variable) {
@@ -222,18 +262,6 @@ export const navigateTo = action((object: IEezObject) => {
         return;
     }
 
-    ancestor = getAncestorOfType(object, Variable.classInfo);
-    if (ancestor) {
-        projectStore.layoutModels.selectTab(
-            projectStore.layoutModels.root,
-            LayoutModels.VARIABLES_TAB_ID
-        );
-        projectStore.navigationStore.subnavigationSelectedItems[
-            NavigationStore.VARIABLES_SUB_NAVIGATION_ID
-        ] = NavigationStore.VARIABLES_SUB_NAVIGATION_ITEM_GLOBAL;
-        return;
-    }
-
     ancestor = getAncestorOfType(object, Structure.classInfo);
     if (ancestor) {
         projectStore.layoutModels.selectTab(
@@ -243,6 +271,14 @@ export const navigateTo = action((object: IEezObject) => {
         projectStore.navigationStore.subnavigationSelectedItems[
             NavigationStore.VARIABLES_SUB_NAVIGATION_ID
         ] = NavigationStore.VARIABLES_SUB_NAVIGATION_ITEM_STRUCTS;
+
+        if (object instanceof Structure) {
+            runInAction(() => {
+                projectStore.navigationStore.selectedStructureObject.set(
+                    object
+                );
+            });
+        }
         return;
     }
 
@@ -255,15 +291,17 @@ export const navigateTo = action((object: IEezObject) => {
         projectStore.navigationStore.subnavigationSelectedItems[
             NavigationStore.VARIABLES_SUB_NAVIGATION_ID
         ] = NavigationStore.VARIABLES_SUB_NAVIGATION_ITEM_ENUMS;
+
+        if (object instanceof Enum) {
+            runInAction(() => {
+                projectStore.navigationStore.selectedEnumObject.set(object);
+            });
+        }
         return;
     }
 
     if (getAncestorOfType(object, Settings.classInfo)) {
-        // TODO Currently, it always shows general object. But, maybe object is not general.
-        projectStore.editorsStore.openEditor(
-            project.settings,
-            project.settings.general
-        );
+        projectStore.editorsStore.openEditor(project.settings, object);
         return;
     }
 });

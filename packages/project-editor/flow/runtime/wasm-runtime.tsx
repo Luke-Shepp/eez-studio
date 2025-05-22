@@ -69,7 +69,6 @@ import type { IFlowContext } from "project-editor/flow/flow-interfaces";
 import { FLOW_ITERATOR_INDEXES_VARIABLE } from "project-editor/features/variable/defs";
 import type {
     IObjectVariableType,
-    IObjectVariableValueConstructorParams,
     IVariable,
     ValueType
 } from "eez-studio-types";
@@ -80,6 +79,7 @@ import { getClassByName } from "project-editor/core/object";
 import { FLOW_EVENT_KEYDOWN } from "project-editor/flow/runtime/flow-events";
 import { preloadAllBitmaps } from "project-editor/features/bitmap/bitmap";
 import { releaseRuntimeDashboardStates } from "project-editor/flow/runtime/component-execution-states";
+import { findBitmap } from "project-editor/project/assets";
 import { hasClass } from "eez-studio-shared/dom";
 
 interface IGlobalVariableBase {
@@ -135,8 +135,12 @@ export class WasmRuntime extends RemoteRuntime {
         y: number;
         pressed: number;
     }[] = [];
+
+    wheelUpdated = false;
     wheelDeltaY = 0;
-    wheelClicked = 0;
+    wheelPressed = 0;
+
+    keysPressed: number[] = [];
     screen: any;
     lastScreen: any;
 
@@ -146,6 +150,8 @@ export class WasmRuntime extends RemoteRuntime {
     componentProperties = new ComponentProperties(this);
 
     lgvlPageRuntime: LVGLPageViewerRuntime | undefined;
+
+    selectedDashboardTheme: string | undefined;
 
     onInitialized: (() => void) | undefined;
 
@@ -157,7 +163,8 @@ export class WasmRuntime extends RemoteRuntime {
         makeObservable(this, {
             worker: observable.shallow,
             displayWidth: observable,
-            displayHeight: observable
+            displayHeight: observable,
+            selectedDashboardTheme: observable
         });
     }
 
@@ -235,6 +242,10 @@ export class WasmRuntime extends RemoteRuntime {
             initJSObjectsMap(this.assetsMap, this.wasmModuleId);
         }
 
+        if (this.projectStore.projectTypeTraits.isLVGL) {
+            await preloadAllBitmaps(this.projectStore);
+        }
+
         this.worker = createWasmWorker(
             this.wasmModuleId,
             isDebuggerActive
@@ -258,6 +269,8 @@ export class WasmRuntime extends RemoteRuntime {
                 : undefined,
             this.displayWidth,
             this.displayHeight,
+            this.projectStore.project.settings.general.darkTheme,
+            this.projectStore.project.settings.build.screensLifetimeSupport,
             (className: string) => getClassByName(this.projectStore, className),
             (key: string) => {
                 return this.projectStore.runtimeSettings.readSettings(key);
@@ -265,18 +278,21 @@ export class WasmRuntime extends RemoteRuntime {
             (key: string, value: any) => {
                 this.projectStore.runtimeSettings.writeSettings(key, value);
             },
+            this.hasWidgetHandle,
             this.getWidgetHandle,
             this.getWidgetHandleInfo
         );
 
         if (this.projectStore.projectTypeTraits.isLVGL) {
-            await preloadAllBitmaps(this.projectStore);
-
             this.lgvlPageRuntime = new LVGLPageViewerRuntime(this);
         }
     }
 
     async doStopRuntime(notifyUser: boolean) {
+        if (this.worker?.wasm?._flowCleanup) {
+            this.worker.wasm._flowCleanup();
+        }
+
         if (this.projectStore.context.type == "instrument-dashboard") {
             notifyUser = false;
         }
@@ -311,6 +327,8 @@ export class WasmRuntime extends RemoteRuntime {
         }
 
         releaseRuntimeDashboardStates(this.wasmModuleId);
+
+        this.cleanup();
     }
 
     stop() {
@@ -324,7 +342,7 @@ export class WasmRuntime extends RemoteRuntime {
 
     onDebuggerActiveChanged() {
         if (this.isDebuggerActive) {
-            this.worker.wasm._setDebuggerMessageSubsciptionFilter(0xffffffff);
+            this.worker?.wasm._setDebuggerMessageSubsciptionFilter(0xffffffff);
         }
 
         super.onDebuggerActiveChanged();
@@ -333,11 +351,97 @@ export class WasmRuntime extends RemoteRuntime {
     ////////////////////////////////////////////////////////////////////////////////
 
     onWorkerMessage = (workerToRenderMessage: WorkerToRenderMessage) => {
-        if (workerToRenderMessage.getLvglImageByName) {
+        if (workerToRenderMessage.getObjectVariableMemberValue) {
+            const arrayValue = getValue(
+                this.worker.wasm,
+                workerToRenderMessage.getObjectVariableMemberValue.arrayValuePtr
+            );
+
+            let result = undefined;
+
+            const objectVariableType = getObjectVariableTypeFromType(
+                this.projectStore,
+                arrayValue.valueType
+            );
+            if (objectVariableType) {
+                const objectValue = objectVariableType.getValue
+                    ? objectVariableType.getValue(arrayValue.value)
+                    : undefined;
+                if (objectValue) {
+                    result =
+                        objectVariableType.valueFieldDescriptions[
+                            workerToRenderMessage.getObjectVariableMemberValue
+                                .memberIndex
+                        ].getFieldValue(objectValue);
+                }
+            }
+
+            return result;
+        } else if (workerToRenderMessage.getBitmapAsDataURL) {
+            const bitmap = findBitmap(
+                this.projectStore.project,
+                workerToRenderMessage.getBitmapAsDataURL.name
+            );
+            if (bitmap) {
+                return bitmap.imageSrc;
+            }
+            return null;
+        } else if (workerToRenderMessage.setDashboardColorTheme) {
+            const themeName =
+                workerToRenderMessage.setDashboardColorTheme.themeName;
+            runInAction(() => (this.selectedDashboardTheme = themeName));
+        } else if (workerToRenderMessage.getLvglScreenByName) {
+            return this.lgvlPageRuntime?.getLvglScreenByName(
+                workerToRenderMessage.getLvglScreenByName.name
+            );
+        } else if (workerToRenderMessage.getLvglObjectByName) {
+            return this.lgvlPageRuntime?.getLvglObjectByName(
+                workerToRenderMessage.getLvglObjectByName.name,
+                []
+            );
+        } else if (workerToRenderMessage.getLvglGroupByName) {
+            return this.lgvlPageRuntime?.getLvglGroupByName(
+                workerToRenderMessage.getLvglGroupByName.name
+            );
+        } else if (workerToRenderMessage.getLvglStyleByName) {
+            return this.lgvlPageRuntime?.getLvglStyleByName(
+                workerToRenderMessage.getLvglStyleByName.name
+            );
+        } else if (workerToRenderMessage.getLvglImageByName) {
             return (
                 this.lgvlPageRuntime?.getBitmapPtrByName(
                     workerToRenderMessage.getLvglImageByName.name
                 ) ?? 0
+            );
+        } else if (workerToRenderMessage.lvglObjAddStyle) {
+            this.lgvlPageRuntime?.addStyle(
+                workerToRenderMessage.lvglObjAddStyle.targetObj,
+                workerToRenderMessage.lvglObjAddStyle.styleIndex
+            );
+        } else if (workerToRenderMessage.lvglObjRemoveStyle) {
+            this.lgvlPageRuntime?.removeStyle(
+                workerToRenderMessage.lvglObjRemoveStyle.targetObj,
+                workerToRenderMessage.lvglObjRemoveStyle.styleIndex
+            );
+        } else if (workerToRenderMessage.lvglSetColorTheme) {
+            this.lgvlPageRuntime?.setColorTheme(
+                workerToRenderMessage.lvglSetColorTheme.themeName
+            );
+        } else if (workerToRenderMessage.lvglCreateScreen) {
+            this.lgvlPageRuntime?.lvglCreateScreen(
+                workerToRenderMessage.lvglCreateScreen.screenIndex
+            );
+        } else if (workerToRenderMessage.lvglDeleteScreen) {
+            this.lgvlPageRuntime?.lvglDeleteScreen(
+                workerToRenderMessage.lvglDeleteScreen.screenIndex
+            );
+        } else if (workerToRenderMessage.lvglScreenTick) {
+            this.lgvlPageRuntime?.lvglScreenTick();
+        } else if (workerToRenderMessage.lvglOnEventHandler) {
+            this.lgvlPageRuntime?.lvglOnEventHandler(
+                workerToRenderMessage.lvglOnEventHandler.obj,
+                workerToRenderMessage.lvglOnEventHandler.eventCode,
+                workerToRenderMessage.lvglOnEventHandler.event
             );
         }
         this.onWorkerMessageAsync(workerToRenderMessage);
@@ -402,10 +506,10 @@ export class WasmRuntime extends RemoteRuntime {
             }
 
             if (workerToRenderMessage.freeArrayValue) {
-                // console.log(
-                //     "freeArrayValue",
-                //     workerToRenderMessage.freeArrayValue
-                // );
+                console.log(
+                    "freeArrayValue",
+                    workerToRenderMessage.freeArrayValue
+                );
 
                 const valueType =
                     workerToRenderMessage.freeArrayValue.valueType;
@@ -419,18 +523,11 @@ export class WasmRuntime extends RemoteRuntime {
                         valueType
                     );
                     if (objectVariableType) {
-                        let value;
-                        if (objectVariableType.getValue) {
-                            value = objectVariableType.getValue(
-                                workerToRenderMessage.freeArrayValue.value
-                            );
-                        } else {
-                            value = objectVariableType.createValue(
-                                workerToRenderMessage.freeArrayValue
-                                    .value as IObjectVariableValueConstructorParams,
-                                true
-                            );
-                        }
+                        let value = objectVariableType.getValue
+                            ? objectVariableType.getValue(
+                                  workerToRenderMessage.freeArrayValue.value
+                              )
+                            : undefined;
                         if (value) {
                             objectVariableType.destroyValue(value);
                         }
@@ -513,10 +610,12 @@ export class WasmRuntime extends RemoteRuntime {
             wheel: this.isPaused
                 ? undefined
                 : {
+                      updated: this.wheelUpdated,
                       deltaY: this.wheelDeltaY,
-                      clicked: this.wheelClicked
+                      pressed: this.wheelPressed
                   },
             pointerEvents: this.isPaused ? undefined : this.pointerEvents,
+            keysPressed: this.isPaused ? undefined : this.keysPressed,
             updateGlobalVariableValues:
                 this.getUpdatedObjectGlobalVariableValues(),
             evalProperties: this.componentProperties.evalProperties
@@ -524,10 +623,10 @@ export class WasmRuntime extends RemoteRuntime {
 
         this.worker.postMessage(message);
 
+        this.wheelUpdated = false;
         this.wheelDeltaY = 0;
-        this.wheelClicked = 0;
         this.pointerEvents = [];
-        //this.screen = undefined;
+        this.keysPressed = [];
     };
 
     setCanvasContext(ctx: CanvasRenderingContext2D) {
@@ -707,6 +806,10 @@ export class WasmRuntime extends RemoteRuntime {
                 );
                 globalVariable.objectVariableValue = objectVariableValue;
                 globalVariable.studioModified = true;
+                this.projectStore.dataContext.set(
+                    globalVariable.variable.name,
+                    objectVariableValue
+                );
                 return;
             }
         }
@@ -715,116 +818,27 @@ export class WasmRuntime extends RemoteRuntime {
     getUpdatedObjectGlobalVariableValues(): IGlobalVariable[] {
         const updatedGlobalVariableValues: IGlobalVariable[] = [];
 
-        function isDifferent(
-            oldArrayValue: ArrayValue | null,
-            newArrayValue: ArrayValue | null
-        ) {
-            if (oldArrayValue == null) {
-                return newArrayValue != null;
-            }
-
-            if (newArrayValue == null) {
-                return oldArrayValue != null;
-            }
-
-            for (let i = 0; i < oldArrayValue.values.length; i++) {
-                const oldValue = oldArrayValue.values[i];
-                const newValue = newArrayValue.values[i];
-                if (oldValue != null && typeof oldValue == "object") {
-                    if (isDifferent(oldValue, newValue as ArrayValue)) {
-                        return true;
-                    }
-                } else {
-                    if (oldValue != newValue) {
-                        return true;
-                    }
-                }
-            }
-            return false;
-        }
-
         for (const globalVariable of this.globalVariables) {
             const engineValuePtr = this.worker.wasm._getGlobalVariable(
                 globalVariable.globalVariableIndex
             );
 
-            const engineValueWithType = getValue(
-                this.worker.wasm,
-                engineValuePtr
-            );
-
-            if (globalVariable.kind == "object") {
-                if (globalVariable.studioModified) {
-                    updatedGlobalVariableValues.push({
-                        kind: "array",
-                        globalVariableIndex: globalVariable.globalVariableIndex,
-                        value: globalVariable.value
-                    });
-                    globalVariable.studioModified = false;
-                    continue;
-                }
-
-                let oldArrayValue;
-                let objectVariableValue;
-
-                const engineArrayValue = createJsArrayValue(
-                    +this.assetsMap.typeIndexes[engineValueWithType.valueType],
-                    engineValueWithType.value,
-                    this.assetsMap,
-                    undefined
-                );
-
-                const objectVariableType = getObjectVariableTypeFromType(
-                    this.projectStore,
-                    globalVariable.variable.type
-                );
-
-                if (
-                    engineArrayValue &&
-                    objectVariableType &&
-                    objectVariableType.getValue
-                ) {
-                    oldArrayValue = engineArrayValue;
-                    objectVariableValue = objectVariableType.getValue(
-                        engineValueWithType.value
-                    );
-                    if (!objectVariableValue) {
-                        continue;
-                    }
-                    globalVariable.objectVariableValue = objectVariableValue;
-                } else {
-                    oldArrayValue = globalVariable.value;
-                    objectVariableValue = globalVariable.objectVariableValue;
-                }
-
-                const newArrayValue = createJsArrayValue(
-                    +this.assetsMap.typeIndexes[globalVariable.variable.type],
-                    objectVariableValue,
-                    this.assetsMap,
-                    (type: string) => {
-                        return getObjectVariableTypeFromType(
-                            this.projectStore,
-                            type
-                        );
-                    }
-                );
-
-                if (isDifferent(oldArrayValue, newArrayValue)) {
-                    // console.log(
-                    //     "object global variable updated",
-                    //     oldArrayValue,
-                    //     newArrayValue
-                    // );
-
-                    updatedGlobalVariableValues.push({
-                        kind: "array",
-                        globalVariableIndex: globalVariable.globalVariableIndex,
-                        value: newArrayValue
-                    });
-
-                    globalVariable.value = newArrayValue;
-                }
+            if (
+                globalVariable.kind == "object" &&
+                globalVariable.studioModified
+            ) {
+                updatedGlobalVariableValues.push({
+                    kind: "array",
+                    globalVariableIndex: globalVariable.globalVariableIndex,
+                    value: globalVariable.value
+                });
+                globalVariable.studioModified = false;
             } else {
+                const engineValueWithType = getValue(
+                    this.worker.wasm,
+                    engineValuePtr
+                );
+
                 this.projectStore.dataContext.set(
                     globalVariable.variable.name,
                     engineValueWithType.value
@@ -864,13 +878,28 @@ export class WasmRuntime extends RemoteRuntime {
 
         for (let i = 0; i < this.globalVariables.length; i++) {
             const globalVariable = this.globalVariables[i];
-            if (
-                globalVariable.kind == "object" &&
-                globalVariable.objectVariableValue
-            ) {
-                globalVariable.objectVariableType.destroyValue(
-                    globalVariable.objectVariableValue
+            if (globalVariable.kind == "object") {
+                const engineValuePtr = this.worker.wasm._getGlobalVariable(
+                    globalVariable.globalVariableIndex
                 );
+
+                const engineValueWithType = getValue(
+                    this.worker.wasm,
+                    engineValuePtr
+                );
+
+                if (typeof engineValueWithType.value == "object") {
+                    let objectValue = globalVariable.objectVariableType.getValue
+                        ? globalVariable.objectVariableType.getValue(
+                              engineValueWithType.value
+                          )
+                        : undefined;
+                    if (objectValue) {
+                        globalVariable.objectVariableType.destroyValue(
+                            objectValue
+                        );
+                    }
+                }
             }
         }
     }
@@ -1042,6 +1071,18 @@ export class WasmRuntime extends RemoteRuntime {
         );
     }
 
+    evalPropertyWithType(
+        flowContext: IFlowContext,
+        component: Component,
+        propertyName: string
+    ) {
+        return this.componentProperties.evalPropertyWithType(
+            flowContext,
+            component,
+            propertyName
+        );
+    }
+
     executeWidgetAction(
         flowContext: IFlowContext,
         widget: Widget,
@@ -1162,25 +1203,41 @@ export class WasmRuntime extends RemoteRuntime {
             //key = e.key;
         }
 
-        if (e.target instanceof HTMLInputElement) {
+        const passKey =
+            (key != undefined && key.startsWith("F") && key.length > 1) ||
+            key == "Escape";
+
+        if (!passKey) {
+            if (e.target instanceof HTMLInputElement) {
+                if (
+                    (key != "Tab" && key != "ShiftTab") ||
+                    !hasClass(
+                        e.target,
+                        "eez-studio-disable-default-tab-handling"
+                    )
+                ) {
+                    // do not pass key
+                    return;
+                }
+            }
+
             if (
-                (key != "Tab" && key != "ShiftTab") ||
-                !hasClass(e.target, "eez-studio-disable-default-tab-handling")
+                e.target instanceof HTMLSelectElement ||
+                e.target instanceof HTMLTextAreaElement
             ) {
+                // do not pass key
                 return;
             }
-        }
-
-        if (e.target instanceof HTMLSelectElement) {
-            return;
         }
 
         if (key == undefined) {
             return;
         }
 
+        /*
         e.preventDefault();
         e.stopPropagation();
+        */
 
         let valuePtr = createWasmValue(this.worker.wasm, key);
 
@@ -1200,6 +1257,16 @@ export class WasmRuntime extends RemoteRuntime {
         flowStateIndex: number;
         componentIndex: number;
     }[] = [];
+
+    hasWidgetHandle = (flowStateIndex: number, componentIndex: number) => {
+        return (
+            this.widgetHandles.find(
+                widgetHandle =>
+                    widgetHandle.flowStateIndex == flowStateIndex &&
+                    widgetHandle.componentIndex == componentIndex
+            ) != null
+        );
+    };
 
     getWidgetHandle = (flowStateIndex: number, componentIndex: number) => {
         this.widgetHandles.push({
@@ -1275,14 +1342,19 @@ export const WasmCanvas = observer(
             if (!canvas) {
                 return;
             }
+
+            canvas.focus();
+
             const wasmRuntime = this.context.runtime as WasmRuntime;
             if (!wasmRuntime) {
                 return;
             }
 
             if (event.buttons == 4) {
-                wasmRuntime.wheelClicked = 1;
+                wasmRuntime.wheelUpdated = true;
+                wasmRuntime.wheelPressed = 1;
             }
+
             canvas.setPointerCapture(event.pointerId);
             this.sendPointerEvent(event);
         };
@@ -1296,6 +1368,13 @@ export const WasmCanvas = observer(
             if (!canvas) {
                 return;
             }
+
+            const wasmRuntime = this.context.runtime as WasmRuntime;
+            if (wasmRuntime) {
+                wasmRuntime.wheelUpdated = true;
+                wasmRuntime.wheelPressed = 0;
+            }
+
             canvas.releasePointerCapture(event.pointerId);
             this.sendPointerEvent(event);
         };
@@ -1305,16 +1384,89 @@ export const WasmCanvas = observer(
             if (!canvas) {
                 return;
             }
+
+            const wasmRuntime = this.context.runtime as WasmRuntime;
+            if (wasmRuntime) {
+                wasmRuntime.wheelUpdated = true;
+                wasmRuntime.wheelPressed = 0;
+            }
+
             canvas.releasePointerCapture(event.pointerId);
             this.sendPointerEvent(event);
         };
 
         onWheel = (event: WheelEvent) => {
+            if (!this.canvasRef.current) {
+                return;
+            }
+
+            event.preventDefault();
+            event.stopPropagation();
+
+            this.canvasRef.current.focus();
+
             const wasmRuntime = this.context.runtime as WasmRuntime;
             if (!wasmRuntime) {
                 return;
             }
-            wasmRuntime.wheelDeltaY += -event.deltaY;
+            wasmRuntime.wheelUpdated = true;
+            wasmRuntime.wheelDeltaY += event.deltaY;
+        };
+
+        onKeyDown = (event: React.KeyboardEvent<HTMLCanvasElement>) => {
+            const wasmRuntime = this.context.runtime as WasmRuntime;
+            if (!wasmRuntime) {
+                return;
+            }
+
+            const LV_KEY_UP = 17; /*0x11*/
+            const LV_KEY_DOWN = 18; /*0x12*/
+            const LV_KEY_RIGHT = 19; /*0x13*/
+            const LV_KEY_LEFT = 20; /*0x14*/
+            const LV_KEY_ESC = 27; /*0x1B*/
+            const LV_KEY_DEL = 127; /*0x7F*/
+            const LV_KEY_BACKSPACE = 8; /*0x08*/
+            const LV_KEY_ENTER = 10; /*0x0A, '\n'*/
+            const LV_KEY_NEXT = 9; /*0x09, '\t'*/
+            const LV_KEY_PREV = 11; /*0x0B, '*/
+            const LV_KEY_HOME = 2; /*0x02, STX*/
+            const LV_KEY_END = 3; /*0x03, ETX*/
+
+            let key = 0;
+
+            if (event.key == "ArrowRight") {
+                key = LV_KEY_RIGHT;
+            } else if (event.key == "ArrowLeft") {
+                key = LV_KEY_LEFT;
+            } else if (event.key == "ArrowUp") {
+                key = LV_KEY_UP;
+            } else if (event.key == "ArrowDown") {
+                key = LV_KEY_DOWN;
+            } else if (event.key == "Escape") {
+                key = LV_KEY_ESC;
+            } else if (event.key == "Backspace") {
+                key = LV_KEY_BACKSPACE;
+            } else if (event.key == "Delete") {
+                key = LV_KEY_DEL;
+            } else if (event.key == "Enter") {
+                key = LV_KEY_ENTER;
+            } else if (event.key == "Tab") {
+                key = LV_KEY_NEXT;
+            } else if (event.key == "ShiftTab") {
+                key = LV_KEY_PREV;
+            } else if (event.key == "Home") {
+                key = LV_KEY_HOME;
+            } else if (event.key == "End") {
+                key = LV_KEY_END;
+            } else if (event.key.length == 1) {
+                key = event.key.charCodeAt(0);
+            }
+
+            if (key != 0) {
+                event.preventDefault();
+                event.stopPropagation();
+                wasmRuntime.keysPressed.push(key);
+            }
         };
 
         componentDidMount() {
@@ -1326,9 +1478,6 @@ export const WasmCanvas = observer(
 
             const wasmRuntime = this.context.runtime as WasmRuntime;
 
-            canvas.width = wasmRuntime.displayWidth;
-            canvas.height = wasmRuntime.displayHeight;
-
             wasmRuntime.setCanvasContext(canvas.getContext("2d")!);
 
             canvas.addEventListener("pointerdown", this.onPointerDown, true);
@@ -1339,7 +1488,11 @@ export const WasmCanvas = observer(
                 this.onPointerCancel,
                 true
             );
-            document.addEventListener("wheel", this.onWheel, true);
+            canvas.addEventListener("wheel", this.onWheel, {
+                passive: false
+            });
+
+            canvas.focus();
         }
 
         componentWillUnmount() {
@@ -1363,7 +1516,7 @@ export const WasmCanvas = observer(
                     this.onPointerCancel,
                     true
                 );
-                document.removeEventListener("wheel", this.onWheel, true);
+                canvas.removeEventListener("wheel", this.onWheel, false);
             }
         }
 
@@ -1372,6 +1525,7 @@ export const WasmCanvas = observer(
 
             return (
                 <canvas
+                    tabIndex={0}
                     ref={this.canvasRef}
                     width={wasmRuntime.displayWidth}
                     height={wasmRuntime.displayHeight}
@@ -1383,8 +1537,16 @@ export const WasmCanvas = observer(
                                       wasmRuntime.displayWidth
                                   )
                               }
+                            : this.context.project.settings.general
+                                  .displayBorderRadius != 0
+                            ? {
+                                  borderRadius:
+                                      this.context.project.settings.general
+                                          .displayBorderRadius
+                              }
                             : undefined
                     }
+                    onKeyDown={this.onKeyDown}
                 />
             );
         }
@@ -1469,7 +1631,7 @@ class ComponentProperties {
         this.nextPropertyValueIndex = 0;
     }
 
-    evalProperty(
+    evalPropertyWithType(
         flowContext: IFlowContext,
         component: Component,
         propertyName: string
@@ -1587,10 +1749,26 @@ class ComponentProperties {
 
         if (propertyValueIndex < this.propertyValues.length) {
             // get evaluated value
-            return this.propertyValues[propertyValueIndex].get().value;
+            return this.propertyValues[propertyValueIndex].get();
         }
 
         // not evaluated yet
+        return undefined;
+    }
+
+    evalProperty(
+        flowContext: IFlowContext,
+        component: Component,
+        propertyName: string
+    ) {
+        const result = this.evalPropertyWithType(
+            flowContext,
+            component,
+            propertyName
+        );
+        if (result) {
+            return result.value;
+        }
         return undefined;
     }
 

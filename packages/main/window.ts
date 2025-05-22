@@ -5,6 +5,7 @@ import { action, observable, runInAction } from "mobx";
 
 import { getIcon } from "main/util";
 import {
+    settings,
     settingsRegisterWindow,
     settingsSetWindowBoundsIntoParams
 } from "main/settings";
@@ -81,8 +82,10 @@ export function createWindow(params: IWindowParams) {
 
     if (!showHidden) {
         settingsSetWindowBoundsIntoParams(params.url, windowContructorParams);
-
         windowContructorParams.icon = getIcon();
+        if (settings.isDarkTheme) {
+            windowContructorParams.backgroundColor = "#212529";
+        }
     }
 
     let browserWindow = new BrowserWindow(windowContructorParams);
@@ -119,6 +122,10 @@ export function createWindow(params: IWindowParams) {
 
     if (!showHidden) {
         browserWindow.show();
+
+        // browserWindow.once("ready-to-show", () => {
+        //     browserWindow.show();
+        // });
 
         if (!params.utilityWindow) {
             browserWindow.on("close", function (event: any) {
@@ -166,9 +173,7 @@ export function findWindowByParams(params: IWindowParams) {
     return windows.find(win => win.url === params.url);
 }
 
-export function findWindowByBrowserWindow(
-    browserWindow: Electron.BrowserWindow
-) {
+export function findWindowByBrowserWindow(browserWindow: Electron.BaseWindow) {
     return windows.find(win => win.browserWindow === browserWindow);
 }
 
@@ -294,7 +299,7 @@ ipcMain.on("tabs-change", (event, tabs: { id: string; active: boolean }[]) => {
 
 ////////////////////////////////////////////////////////////////////////////////
 
-ipcMain.on("printPDF", (event: any, content: any) => {
+ipcMain.on("printPDF", (event: any, { content, options }: any) => {
     const senderWindow = BrowserWindow.getFocusedWindow();
     if (!senderWindow) {
         return;
@@ -320,14 +325,14 @@ ipcMain.on("printPDF", (event: any, content: any) => {
         let data;
         try {
             // Use default printing options
-            data = await printWindow.webContents.printToPDF({});
+            data = await printWindow.webContents.printToPDF(options);
         } catch (err) {
             await dialog.showMessageBox(senderWindow, {
                 title: "Print to PDF - EEZ Studio",
                 message: err.toString()
             });
         } finally {
-            //printWindow.close();
+            printWindow.close();
         }
 
         if (!data) {

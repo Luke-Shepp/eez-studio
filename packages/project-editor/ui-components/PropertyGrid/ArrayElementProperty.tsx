@@ -1,10 +1,9 @@
-import bootstrap from "bootstrap";
 import React from "react";
 import {
     computed,
-    observable,
     action,
     makeObservable,
+    observable,
     runInAction
 } from "mobx";
 import { observer } from "mobx-react";
@@ -51,23 +50,63 @@ import { Point, pointDistance } from "eez-studio-shared/geometry";
 
 ////////////////////////////////////////////////////////////////////////////////
 
+let objectCollapsedStore = observable.box<
+    { object: IEezObject; collapsed: Set<IEezObject> }[]
+>([]);
+
+const MAX_OBJECTS_IN_COLLAPSED_STORE = 100;
+
 export const ArrayProperty = observer(
     class ArrayProperty extends React.Component<PropertyProps> {
         static contextType = ProjectContext;
         declare context: React.ContextType<typeof ProjectContext>;
 
-        selectedObject: EezObject | undefined;
-
         constructor(props: PropertyProps) {
             super(props);
 
-            this.selectedObject = undefined;
-
             makeObservable(this, {
                 value: computed,
-                objects: computed,
-                selectedObject: observable
+                objects: computed
             });
+        }
+
+        get collapsed() {
+            const object = this.props.objects[0];
+
+            let objectCollapsed = objectCollapsedStore
+                .get()
+                .find(collapsed => collapsed.object == object);
+
+            if (!objectCollapsed) {
+                const collapsed = new Set<IEezObject>();
+
+                if (
+                    this.props.propertyInfo
+                        .showArrayCollapsedByDefaultInPropertyGrid == true
+                ) {
+                    if (this.value) {
+                        for (const object of this.value) {
+                            collapsed.add(object);
+                        }
+                    }
+                }
+
+                objectCollapsed = {
+                    object,
+                    collapsed
+                };
+
+                if (
+                    objectCollapsedStore.get().length ==
+                    MAX_OBJECTS_IN_COLLAPSED_STORE
+                ) {
+                    objectCollapsedStore.get().unshift();
+                }
+
+                objectCollapsedStore.get().push(objectCollapsed);
+            }
+
+            return objectCollapsed.collapsed;
         }
 
         get value() {
@@ -80,39 +119,7 @@ export const ArrayProperty = observer(
             return this.value ?? [];
         }
 
-        componentDidUpdate(prevProps: Readonly<PropertyProps>) {
-            runInAction(() => {
-                if (prevProps.objects[0] != this.props.objects[0]) {
-                    this.selectedObject =
-                        this.value && this.value.length > 0
-                            ? this.value[0]
-                            : undefined;
-                } else if (
-                    this.selectedObject &&
-                    this.value?.indexOf(this.selectedObject) == -1
-                ) {
-                    this.selectedObject = undefined;
-                }
-            });
-        }
-
-        selectObject = action(
-            (object: EezObject, select: boolean, toggle: boolean) => {
-                if (select) {
-                    if (this.selectedObject != object) {
-                        this.selectedObject = object;
-                    } else if (toggle) {
-                        this.selectedObject = undefined;
-                    }
-                } else {
-                    if (this.selectedObject == object) {
-                        this.selectedObject = undefined;
-                    }
-                }
-            }
-        );
-
-        onAdd = async (event: any) => {
+        onAdd = (event: any) => {
             event.preventDefault();
 
             this.context.undoManager.setCombineCommands(true);
@@ -131,12 +138,7 @@ export const ArrayProperty = observer(
             const typeClass = this.props.propertyInfo.typeClass!;
 
             if (typeClass.classInfo.newItem) {
-                const object = await addItem(value);
-                if (object) {
-                    runInAction(() => {
-                        this.selectedObject = object;
-                    });
-                }
+                addItem(value);
             } else {
                 if (!typeClass.classInfo.defaultValue) {
                     console.error(
@@ -152,70 +154,9 @@ export const ArrayProperty = observer(
                     this.context.addObject(value, object);
 
                     this.context.undoManager.setCombineCommands(false);
-
-                    runInAction(() => {
-                        this.selectedObject = object;
-                    });
                 }
             }
         };
-
-        onDelete = (event: any) => {
-            event.preventDefault();
-
-            if (this.selectedObject) {
-                this.context.deleteObject(this.selectedObject);
-                runInAction(() => {
-                    this.selectedObject = undefined;
-                });
-            }
-        };
-
-        onMoveUp = action((event: any) => {
-            event.preventDefault();
-
-            if (this.value && this.selectedObject) {
-                const selectedObjectIndex = this.value.indexOf(
-                    this.selectedObject
-                );
-                if (selectedObjectIndex > 0) {
-                    this.context.undoManager.setCombineCommands(true);
-
-                    const objectBefore = this.value[selectedObjectIndex - 1];
-
-                    deleteObject(this.selectedObject);
-                    this.selectedObject = insertObjectBefore(
-                        objectBefore,
-                        this.selectedObject
-                    );
-
-                    this.context.undoManager.setCombineCommands(false);
-                }
-            }
-        });
-
-        onMoveDown = action((event: any) => {
-            event.preventDefault();
-
-            if (this.value && this.selectedObject) {
-                const selectedObjectIndex = this.value.indexOf(
-                    this.selectedObject
-                );
-                if (selectedObjectIndex < this.value.length - 1) {
-                    this.context.undoManager.setCombineCommands(true);
-
-                    const objectAfter = this.value[selectedObjectIndex + 1];
-
-                    deleteObject(this.selectedObject);
-                    this.selectedObject = insertObjectAfter(
-                        objectAfter,
-                        this.selectedObject
-                    );
-
-                    this.context.undoManager.setCombineCommands(false);
-                }
-            }
-        });
 
         moveItem = action((currentIndex: number, newIndex: number) => {
             const overObject = this.objects[newIndex];
@@ -234,177 +175,107 @@ export const ArrayProperty = observer(
             this.context.undoManager.setCombineCommands(false);
         });
 
-        render() {
-            const { objects, propertyInfo } = this.props;
+        get allCollapsed() {
+            return this.collapsed.size == this.objects.length;
+        }
 
-            let isVerticalOrientation =
-                propertyInfo.arrayItemOrientation == "vertical" ? true : false;
+        collapseAll = action((event: any) => {
+            event.preventDefault();
+
+            if (this.collapsed.size == this.objects.length) {
+                this.collapsed.clear();
+            } else {
+                this.objects.forEach(object => this.collapsed.add(object));
+            }
+        });
+
+        render() {
+            const buttons = [];
+
+            if (this.objects.length > 0) {
+                buttons.push(
+                    <IconAction
+                        key="collapse"
+                        icon={
+                            this.allCollapsed ? (
+                                <svg viewBox="0 0 16 16">
+                                    <path d="M9.00024 9H4.00024V10H9.00024V9Z" />
+                                    <path d="M7.00024 12L7.00024 7L6.00024 7L6.00024 12L7.00024 12Z" />
+                                    <path
+                                        fillRule="evenodd"
+                                        clipRule="evenodd"
+                                        d="M5.00024 3L6.00024 2H13.0002L14.0002 3V10L13.0002 11H11.0002V13L10.0002 14H3.00024L2.00024 13V6L3.00024 5H5.00024V3ZM6.00024 5H10.0002L11.0002 6V10H13.0002V3H6.00024V5ZM10.0002 6H3.00024V13H10.0002V6Z"
+                                    />
+                                </svg>
+                            ) : (
+                                <svg viewBox="0 0 16 16">
+                                    <path d="M9 9H4v1h5z" />
+                                    <path
+                                        fillRule="evenodd"
+                                        clipRule="evenodd"
+                                        d="m5 3 1-1h7l1 1v7l-1 1h-2v2l-1 1H3l-1-1V6l1-1h2zm1 2h4l1 1v4h2V3H6zm4 1H3v7h7z"
+                                    />
+                                </svg>
+                            )
+                        }
+                        iconSize={17}
+                        onClick={this.collapseAll}
+                        title={
+                            this.allCollapsed
+                                ? "Expand All Items"
+                                : "Collapse All Items"
+                        }
+                    />
+                );
+            }
+
+            if (this.objects.length == 0) {
+                buttons.push(
+                    <IconAction
+                        key="add"
+                        icon="material:add"
+                        iconSize={18}
+                        onClick={this.onAdd}
+                        title="Add item"
+                    />
+                );
+            }
+
+            if (this.props.propertyInfo.arrayPropertyEditorAdditionalButtons) {
+                buttons.push(
+                    ...this.props.propertyInfo.arrayPropertyEditorAdditionalButtons(
+                        this.props.objects[0],
+                        this.props.propertyInfo,
+                        this.context
+                    )
+                );
+            }
 
             const toolbar = (
-                <div className="rounded d-flex justify-content-between EezStudio_ArrayPropertyToolbar">
+                <div className="d-flex justify-content-between EezStudio_ArrayPropertyToolbar">
                     <PropertyName {...this.props} />
-                    <Toolbar>
-                        <IconAction
-                            icon="material:add"
-                            iconSize={16}
-                            onClick={this.onAdd}
-                            title="Add item"
-                        />
-                        <IconAction
-                            icon="material:delete"
-                            iconSize={16}
-                            onClick={this.onDelete}
-                            title="Delete item"
-                            enabled={this.selectedObject != undefined}
-                        />
-                        <IconAction
-                            icon={
-                                <svg
-                                    xmlns="http://www.w3.org/2000/svg"
-                                    className="icon icon-tabler icon-tabler-arrow-up"
-                                    width="24"
-                                    height="24"
-                                    viewBox="0 0 24 24"
-                                    strokeWidth="2"
-                                    stroke="currentColor"
-                                    fill="none"
-                                    strokeLinecap="round"
-                                    strokeLinejoin="round"
-                                >
-                                    <path
-                                        stroke="none"
-                                        d="M0 0h24v24H0z"
-                                        fill="none"
-                                    ></path>
-                                    <line x1="12" y1="5" x2="12" y2="19"></line>
-                                    <line x1="18" y1="11" x2="12" y2="5"></line>
-                                    <line x1="6" y1="11" x2="12" y2="5"></line>
-                                </svg>
-                            }
-                            iconSize={16}
-                            onClick={this.onMoveUp}
-                            title="Move up"
-                            enabled={
-                                this.objects.length > 1 &&
-                                this.selectedObject != undefined &&
-                                this.objects.indexOf(this.selectedObject) > 0
-                            }
-                        />
-                        <IconAction
-                            icon={
-                                <svg
-                                    xmlns="http://www.w3.org/2000/svg"
-                                    className="icon icon-tabler icon-tabler-arrow-down"
-                                    width="24"
-                                    height="24"
-                                    viewBox="0 0 24 24"
-                                    strokeWidth="2"
-                                    stroke="currentColor"
-                                    fill="none"
-                                    strokeLinecap="round"
-                                    strokeLinejoin="round"
-                                >
-                                    <path
-                                        stroke="none"
-                                        d="M0 0h24v24H0z"
-                                        fill="none"
-                                    ></path>
-                                    <line x1="12" y1="5" x2="12" y2="19"></line>
-                                    <line
-                                        x1="18"
-                                        y1="13"
-                                        x2="12"
-                                        y2="19"
-                                    ></line>
-                                    <line x1="6" y1="13" x2="12" y2="19"></line>
-                                </svg>
-                            }
-                            iconSize={16}
-                            onClick={this.onMoveDown}
-                            title="Move down"
-                            enabled={
-                                this.objects.length > 1 &&
-                                this.selectedObject != undefined &&
-                                this.objects.indexOf(this.selectedObject) <
-                                    this.objects.length - 1
-                            }
-                        />
-                    </Toolbar>
+                    <Toolbar>{buttons}</Toolbar>
                 </div>
             );
 
-            const typeClass = propertyInfo.typeClass!;
-
             let content;
             if (this.objects.length > 0) {
-                if (isVerticalOrientation) {
-                    content = (
-                        <ArrayPropertyContentVerticalOrientation
-                            objects={this.objects}
-                            selectedObject={this.selectedObject}
-                            selectObject={this.selectObject}
-                            moveItem={this.moveItem}
-                            readOnly={this.props.readOnly}
-                        />
-                    );
-                } else {
-                    const properties = typeClass.classInfo.properties.filter(
-                        propertyInfo =>
-                            isArrayElementPropertyVisible(propertyInfo)
-                    );
-
-                    content = (
-                        <table>
-                            <thead>
-                                <tr>
-                                    {properties.map(propertyInfo => (
-                                        <th
-                                            key={propertyInfo.name}
-                                            className={propertyInfo.name}
-                                            style={{
-                                                width: `${
-                                                    100 / properties.length
-                                                }%`
-                                            }}
-                                        >
-                                            {getObjectPropertyDisplayName(
-                                                objects[0],
-                                                propertyInfo
-                                            )}
-                                        </th>
-                                    ))}
-                                </tr>
-                            </thead>
-                            <tbody style={{ position: "relative" }}>
-                                {this.objects.map((object, itemIndex) => (
-                                    <ArrayElementPropertiesHorizontalOrientation
-                                        itemIndex={itemIndex}
-                                        key={getId(object)}
-                                        object={object}
-                                        readOnly={this.props.readOnly}
-                                        selected={object == this.selectedObject}
-                                        selectObject={this.selectObject}
-                                        moveItem={this.moveItem}
-                                    />
-                                ))}
-                            </tbody>
-                        </table>
-                    );
-                }
+                content = (
+                    <ArrayPropertyContent
+                        objects={this.objects}
+                        moveItem={this.moveItem}
+                        readOnly={this.props.readOnly}
+                        propertyInfo={this.props.propertyInfo}
+                        collapsed={this.collapsed}
+                    />
+                );
             }
 
             const formText = getFormText(this.props);
 
             return (
                 <>
-                    <div
-                        className={classNames(
-                            "rounded EezStudio_ArrayProperty",
-                            {
-                                "vertical-orientation": isVerticalOrientation
-                            }
-                        )}
-                    >
+                    <div className="EezStudio_ArrayProperty">
                         {toolbar}
                         {content}
                     </div>
@@ -417,34 +288,26 @@ export const ArrayProperty = observer(
 
 ////////////////////////////////////////////////////////////////////////////////
 
-const ArrayPropertyContentVerticalOrientation = observer(
-    class ArrayPropertyContentVerticalOrientation extends React.Component<{
+const ArrayPropertyContent = observer(
+    class ArrayPropertyContent extends React.Component<{
         objects: EezObject[];
-        selectedObject: EezObject | undefined;
-        selectObject: (
-            object: EezObject,
-            select: boolean,
-            toggle: boolean
-        ) => void;
         moveItem: (currentIndex: number, newIndex: number) => void;
         readOnly: boolean;
+        propertyInfo: PropertyInfo;
+        collapsed: Set<IEezObject>;
     }> {
         render() {
-            const idAccordion =
-                "accordion-" + getId(getParent(this.props.objects[0]));
-
             return (
-                <div className="accordion accordion-flush" id={idAccordion}>
+                <div className="EezStudio_ArrayPropertyContent">
                     {this.props.objects.map((object, itemIndex) => (
-                        <ArrayElementPropertiesVerticalOrientation
+                        <ArrayElementProperties
                             key={getId(object)}
                             itemIndex={itemIndex}
                             object={object}
                             readOnly={this.props.readOnly}
-                            selected={this.props.selectedObject == object}
-                            selectObject={this.props.selectObject}
                             moveItem={this.props.moveItem}
-                            idAccordion={idAccordion}
+                            propertyInfo={this.props.propertyInfo}
+                            collapsed={this.props.collapsed}
                         />
                     ))}
                 </div>
@@ -452,6 +315,8 @@ const ArrayPropertyContentVerticalOrientation = observer(
         }
     }
 );
+
+////////////////////////////////////////////////////////////////////////////////
 
 class ArrayPropertyItemDraggable {
     static MIN_DISTANCE = 10;
@@ -568,6 +433,8 @@ class ArrayPropertyItemDraggable {
             return itemElement.getBoundingClientRect();
         });
 
+        this.itemRects.forEach(rect => (rect.height += 10)); // add margin of 10px
+
         this.cloneElement = this.itemElement.cloneNode(true) as HTMLDivElement;
 
         // cloneNode doesn't clone select values
@@ -586,15 +453,6 @@ class ArrayPropertyItemDraggable {
         }
 
         //
-        if (this.cloneElement instanceof HTMLTableRowElement) {
-            this.cloneElement
-                .querySelectorAll("td")
-                ?.forEach(
-                    (tdElement: HTMLTableCellElement) =>
-                        (tdElement.style.width = 1 / 3 + "%")
-                );
-        }
-
         const r1 = this.itemRects[0];
         const r2 = this.itemRects[this.currentItemIndex];
 
@@ -606,8 +464,11 @@ class ArrayPropertyItemDraggable {
         this.cloneElement.style.height = r2.height + "px";
         this.cloneElement.style.boxShadow =
             "0 0 0 1px rgba(63, 63, 68, 0.05), -1px 0 15px 0 rgba(34, 33, 81, 0.01), 0px 15px 15px 0 rgba(34, 33, 81, 0.25)";
+        this.cloneElement.style.margin = "0";
 
         this.cloneElement.style.transform = `translate(0px, 0px) scale(${ArrayPropertyItemDraggable.PICKED_UP_SCALE})`;
+
+        this.cloneElement.style.backgroundColor = "var(--bs-body-bg)";
 
         this.itemElement.style.opacity = "0.5";
         this.itemElement.parentElement!.appendChild(this.cloneElement);
@@ -756,189 +617,635 @@ class ArrayPropertyItemDraggable {
                 clearTimeout(this.testDraggingTimeout);
                 this.testDraggingTimeout = undefined;
             }
-
-            if (this.itemElement) {
-                const collapseElement = this.itemElement.querySelector(
-                    ".accordion-collapse"
-                );
-                if (collapseElement) {
-                    const bsCollapse =
-                        bootstrap.Collapse.getInstance(collapseElement);
-                    if (bsCollapse) {
-                        bsCollapse.toggle();
-                    }
-                }
-            }
         }
     }
 }
 
 ////////////////////////////////////////////////////////////////////////////////
 
-const ArrayElementPropertiesVerticalOrientation = observer(
-    class ArrayElementPropertiesVerticalOrientation extends React.Component<{
+const ArrayElementProperties = observer(
+    class ArrayElementProperties extends React.Component<{
         itemIndex: number;
-        object: IEezObject;
+        object: EezObject;
         readOnly: boolean;
         className?: string;
-        selected: boolean;
-        selectObject: (
-            object: IEezObject,
-            select: boolean,
-            toggle: boolean
-        ) => void;
         moveItem: (currentIndex: number, newIndex: number) => void;
-        idAccordion: string;
+        propertyInfo: PropertyInfo;
+        collapsed: Set<IEezObject>;
     }> {
         static contextType = ProjectContext;
         declare context: React.ContextType<typeof ProjectContext>;
 
-        refCollapse = React.createRef<HTMLDivElement>();
+        static updateStartTime = observable.box<number | undefined>(undefined);
+
         refHeader = React.createRef<HTMLHeadingElement>();
 
-        bsCollapse: bootstrap.Collapse;
-
         draggable = new ArrayPropertyItemDraggable(
-            "accordion-item",
+            "EezStudio_ArrayElementProperty_Item",
             this.props.moveItem
         );
 
         componentDidMount() {
             this.draggable.attach(this.refHeader.current!);
-
-            this.bsCollapse = new bootstrap.Collapse(
-                this.refCollapse.current!,
-                { toggle: false }
-            );
-            if (this.props.selected) {
-                this.bsCollapse.show();
-            } else {
-                this.bsCollapse.hide();
-            }
-
-            this.refCollapse.current!.addEventListener(
-                "show.bs.collapse",
-                this.onShow
-            );
-            this.refCollapse.current!.addEventListener(
-                "hide.bs.collapse",
-                this.onHide
-            );
         }
 
-        componentDidUpdate() {
-            if (this.props.selected) {
-                this.bsCollapse.show();
-            } else {
-                this.bsCollapse.hide();
-            }
-        }
+        componentDidUpdate() {}
 
         componentWillUnmount() {
             this.draggable.attach(null);
+        }
 
-            this.refCollapse.current!.removeEventListener(
-                "show.bs.collapse",
-                this.onShow
-            );
-            this.refCollapse.current!.removeEventListener(
-                "hide.bs.collapse",
-                this.onHide
+        get objects() {
+            return getParent(this.props.object) as EezObject[];
+        }
+
+        animate<T>(
+            start: (
+                elements: NodeListOf<HTMLDivElement>,
+                rects: DOMRect[],
+                parent: HTMLDivElement
+            ) => T,
+            step: (params: T, t: number) => void,
+            finish: (params: T) => void
+        ) {
+            const ANIM_DURATION = 150;
+
+            const startTime = Date.now();
+
+            const animate = () => {
+                let t = (Date.now() - startTime) / ANIM_DURATION;
+                if (t > 1.0) {
+                    t = 1.0;
+                }
+
+                step(params, t);
+
+                if (t < 1.0) {
+                    window.requestAnimationFrame(animate);
+                } else {
+                    finish(params);
+                }
+            };
+
+            const parent: HTMLDivElement = this.refHeader.current!.closest(
+                ".EezStudio_ArrayPropertyContent"
+            )!;
+
+            const elements: NodeListOf<HTMLDivElement> =
+                parent?.querySelectorAll(
+                    ".EezStudio_ArrayElementProperty_Item"
+                );
+
+            const rects = [...elements].map(el => {
+                return el.getBoundingClientRect();
+            });
+
+            const params = start(elements, rects, parent);
+            animate();
+        }
+
+        animateAdd(onFinish: () => void, i: number) {
+            this.animate(
+                (elements, rects, parent) => {
+                    const y = -rects[i].height;
+
+                    for (let j = 0; j < i; j++) {
+                        elements[j].style.position = "relative";
+                        elements[j].style.zIndex =
+                            j < i ? "2" : j == i ? "1" : "0";
+                    }
+
+                    return {
+                        elements,
+                        i,
+                        y,
+                        parent,
+                        parentHeight: parent.clientHeight
+                    };
+                },
+                ({ elements, i, y, parent, parentHeight }, t) => {
+                    for (let j = i; j < elements.length; j++) {
+                        elements[j].style.transform = `translate(0px, ${
+                            (1 - t) * y
+                        }px)`;
+                    }
+                    elements[i].style.opacity = `${t}`;
+                    parent.style.height = `${parentHeight + (1 - t) * y}px`;
+                },
+                ({ elements, i, parent }) => {
+                    for (let j = i; j < elements.length; j++) {
+                        elements[j].style.transform = "";
+                    }
+                    elements[i].style.opacity = "";
+
+                    for (let j = 0; j < i; j++) {
+                        elements[j].style.position = "";
+                        elements[j].style.zIndex = "";
+                    }
+
+                    onFinish();
+                    setTimeout(() => (parent.style.height = ""));
+                }
             );
         }
 
-        onShow = (event: any) => {
-            if (event.target == this.refCollapse.current) {
-                this.props.selectObject(this.props.object, true, false);
+        onAdd = async (addBefore: boolean) => {
+            const typeClass = this.props.propertyInfo.typeClass!;
+
+            let newObject: EezObject | null;
+
+            if (typeClass.classInfo.newItem) {
+                this.context.undoManager.setCombineCommands(true);
+
+                try {
+                    newObject = await addItem(this.objects);
+                } catch (err) {
+                    runInAction(() =>
+                        ArrayElementProperties.updateStartTime.set(undefined)
+                    );
+                    return;
+                }
+
+                if (!newObject) {
+                    this.context.undoManager.setCombineCommands(false);
+
+                    runInAction(() =>
+                        ArrayElementProperties.updateStartTime.set(undefined)
+                    );
+
+                    return;
+                }
+
+                deleteObject(newObject);
+
+                if (addBefore) {
+                    this.context.insertObjectBefore(
+                        this.props.object,
+                        newObject
+                    );
+                } else {
+                    this.context.insertObjectAfter(
+                        this.props.object,
+                        newObject
+                    );
+                }
+
+                this.context.undoManager.setCombineCommands(false);
+            } else {
+                if (!typeClass.classInfo.defaultValue) {
+                    console.error(
+                        `Class "${typeClass.name}" is missing defaultValue`
+                    );
+
+                    runInAction(() =>
+                        ArrayElementProperties.updateStartTime.set(undefined)
+                    );
+
+                    return;
+                }
+
+                this.context.undoManager.setCombineCommands(true);
+
+                newObject = createObject(
+                    this.context,
+                    typeClass.classInfo.defaultValue,
+                    typeClass
+                );
+
+                if (addBefore) {
+                    this.context.insertObjectBefore(
+                        this.props.object,
+                        newObject
+                    );
+                } else {
+                    this.context.insertObjectAfter(
+                        this.props.object,
+                        newObject
+                    );
+                }
+
+                this.context.undoManager.setCombineCommands(false);
             }
+
+            setTimeout(() => {
+                if (newObject) {
+                    this.animateAdd(() => {
+                        runInAction(() =>
+                            ArrayElementProperties.updateStartTime.set(
+                                undefined
+                            )
+                        );
+                    }, this.objects.indexOf(newObject));
+                } else {
+                    ArrayElementProperties.updateStartTime.set(undefined);
+                }
+            });
         };
 
-        onHide = (event: any) => {
-            if (event.target == this.refCollapse.current) {
-                this.props.selectObject(this.props.object, false, false);
+        onAddBefore = (event: any) => {
+            event.preventDefault();
+
+            if (ArrayElementProperties.updateStartTime.get() != undefined) {
+                return;
             }
+
+            runInAction(() =>
+                ArrayElementProperties.updateStartTime.set(Date.now())
+            );
+
+            this.onAdd(true);
         };
+
+        onAddAfter = (event: any) => {
+            event.preventDefault();
+
+            if (ArrayElementProperties.updateStartTime.get() != undefined) {
+                return;
+            }
+
+            runInAction(() =>
+                ArrayElementProperties.updateStartTime.set(Date.now())
+            );
+
+            this.onAdd(false);
+        };
+
+        animateDelete(onFinish: () => void, i: number) {
+            this.animate(
+                (elements, rects, parent) => {
+                    const y = -rects[i].height;
+
+                    return {
+                        elements,
+                        i,
+                        y,
+                        parent,
+                        parentHeight: parent.clientHeight
+                    };
+                },
+                ({ elements, i, y, parent, parentHeight }, t) => {
+                    for (let j = i + 1; j < elements.length; j++) {
+                        elements[j].style.transform = `translate(0px, ${
+                            t * y
+                        }px)`;
+                    }
+                    elements[i].style.opacity = `${1 - t}`;
+                    parent.style.height = `${parentHeight + t * y}px`;
+                },
+                ({ elements, i, parent }) => {
+                    onFinish();
+
+                    setTimeout(() => {
+                        for (let j = i + 1; j < elements.length; j++) {
+                            elements[j].style.transform = "";
+                        }
+
+                        parent.style.height = "";
+                    });
+                }
+            );
+        }
+
+        onDelete = (event: any) => {
+            event.preventDefault();
+
+            if (ArrayElementProperties.updateStartTime.get() != undefined) {
+                return;
+            }
+
+            runInAction(() =>
+                ArrayElementProperties.updateStartTime.set(Date.now())
+            );
+
+            this.animateDelete(() => {
+                this.context.deleteObject(this.props.object);
+
+                runInAction(() =>
+                    ArrayElementProperties.updateStartTime.set(undefined)
+                );
+            }, this.objects.indexOf(this.props.object));
+        };
+
+        animateMove(onFinish: () => void, i: number, fixZIndex: boolean) {
+            this.animate(
+                (elements, rects) => {
+                    const y1 = rects[i].height;
+                    const y2 = -rects[i - 1].height;
+
+                    if (fixZIndex) {
+                        elements[i - 1].style.position = "relative";
+                        elements[i - 1].style.zIndex = "1";
+                    }
+
+                    return {
+                        elements,
+                        i,
+                        y1,
+                        y2
+                    };
+                },
+                ({ elements, i, y1, y2 }, t) => {
+                    elements[i - 1].style.transform = `translate(10px, ${
+                        t * y1
+                    }px)`;
+                    elements[i].style.transform = `translate(-10px, ${
+                        t * y2
+                    }px)`;
+                },
+                ({ elements, i }) => {
+                    onFinish();
+
+                    setTimeout(() => {
+                        elements[i - 1].style.position = "static";
+                        elements[i - 1].style.zIndex = "";
+                        elements[i - 1].style.transform = "";
+                        elements[i].style.transform = "";
+                    });
+                }
+            );
+        }
+
+        onMoveUp = action((event: any) => {
+            event.preventDefault();
+
+            if (ArrayElementProperties.updateStartTime.get() != undefined) {
+                return;
+            }
+
+            const objectIndex = this.objects.indexOf(this.props.object);
+            if (objectIndex > 0) {
+                runInAction(() =>
+                    ArrayElementProperties.updateStartTime.set(Date.now())
+                );
+
+                this.animateMove(
+                    () => {
+                        this.context.undoManager.setCombineCommands(true);
+
+                        const objectBefore = this.objects[objectIndex - 1];
+
+                        deleteObject(this.props.object);
+
+                        insertObjectBefore(objectBefore, this.props.object);
+
+                        this.context.undoManager.setCombineCommands(false);
+
+                        runInAction(() =>
+                            ArrayElementProperties.updateStartTime.set(
+                                undefined
+                            )
+                        );
+                    },
+                    this.objects.indexOf(this.props.object),
+                    false
+                );
+            }
+        });
+
+        onMoveDown = action((event: any) => {
+            event.preventDefault();
+
+            if (ArrayElementProperties.updateStartTime.get() != undefined) {
+                return;
+            }
+
+            const objectIndex = this.objects.indexOf(this.props.object);
+            if (objectIndex < this.objects.length - 1) {
+                this.animateMove(
+                    () => {
+                        this.context.undoManager.setCombineCommands(true);
+
+                        const objectAfter = this.objects[objectIndex + 1];
+
+                        deleteObject(this.props.object);
+
+                        insertObjectAfter(objectAfter, this.props.object);
+
+                        this.context.undoManager.setCombineCommands(false);
+
+                        runInAction(() =>
+                            ArrayElementProperties.updateStartTime.set(
+                                undefined
+                            )
+                        );
+                    },
+                    this.objects.indexOf(this.props.object) + 1,
+                    true
+                );
+            }
+        });
+
+        toggleCollapse = action((event: any) => {
+            event.preventDefault();
+
+            if (this.props.collapsed.has(this.props.object)) {
+                this.props.collapsed.delete(this.props.object);
+            } else {
+                this.props.collapsed.add(this.props.object);
+            }
+        });
 
         render() {
-            const idAccordionHeading =
-                "accordion-heading-" + getId(this.props.object);
-            const idAccordionCollapse =
-                "accordion-collapse-" + getId(this.props.object);
+            const collapsed = this.props.collapsed.has(this.props.object);
 
             return (
                 <div
-                    className={classNames("element-enclosure accordion-item", {
-                        open: this.props.selected
-                    })}
+                    className={"EezStudio_ArrayElementProperty_Item"}
                     data-item-index={this.props.itemIndex}
                 >
-                    <h2
-                        ref={this.refHeader}
-                        className="accordion-header"
-                        id={idAccordionHeading}
-                    >
-                        <button
-                            className={classNames("accordion-button", {
-                                collapsed: !this.props.selected
-                            })}
-                            type="button"
-                            data-bs-toggle="collapse"
-                            data-bs-target={`#${idAccordionCollapse}`}
-                            aria-expanded="false"
-                            aria-controls={idAccordionCollapse}
-                        >
-                            <div className="element-index">
-                                {`#${this.props.itemIndex + 1} `}
-                            </div>
+                    <div className="EezStudio_ArrayElementProperty_Header">
+                        <IconAction
+                            icon={
+                                collapsed
+                                    ? "material:keyboard_arrow_right"
+                                    : "material:keyboard_arrow_down"
+                            }
+                            iconSize={18}
+                            onClick={this.toggleCollapse}
+                            title="Add Item Before"
+                        />
+
+                        <div ref={this.refHeader}>
+                            {!this.props.propertyInfo
+                                .hideElementIndexInPropertyGrid && (
+                                <div className="element-index">
+                                    {`#${this.props.itemIndex + 1} `}
+                                </div>
+                            )}
                             <div className="label">
-                                {getListLabel(
-                                    this.props.object,
-                                    !this.props.selected
-                                )}
+                                {getListLabel(this.props.object, collapsed)}
                             </div>
-                        </button>
-                    </h2>
-                    <div
-                        ref={this.refCollapse}
-                        id={idAccordionCollapse}
-                        className="accordion-collapse collapse"
-                        aria-labelledby={idAccordionHeading}
-                        data-bs-parent={this.props.idAccordion}
-                    >
-                        <div className="accordion-body">
-                            <table>
-                                <tbody>
-                                    {getClassInfo(
-                                        this.props.object
-                                    ).properties.map(propertyInfo => (
-                                        <tr
-                                            key={propertyInfo.name}
-                                            className={classNames({
-                                                inError: isPropertyInError(
-                                                    this.props.object,
-                                                    propertyInfo
-                                                )
-                                            })}
-                                        >
-                                            <ArrayElementPropertyVerticalOrientation
-                                                propertyInfo={propertyInfo}
-                                                object={this.props.object}
-                                                readOnly={this.props.readOnly}
-                                            />
-                                        </tr>
-                                    ))}
-                                </tbody>
-                            </table>
                         </div>
+
+                        <Toolbar>
+                            <IconAction
+                                icon={
+                                    <svg viewBox="0 0 24 24" fill="none">
+                                        <path
+                                            d="M3 5a1 1 0 0 0 1 1h16a1 1 0 1 0 0-2H4a1 1 0 0 0-1 1m9 15a1 1 0 0 0 1-1v-3h3a1 1 0 1 0 0-2h-3v-3a1 1 0 1 0-2 0v3H8a1 1 0 1 0 0 2h3v3a1 1 0 0 0 1 1"
+                                            fill="currentColor"
+                                        />
+                                    </svg>
+                                }
+                                iconSize={18}
+                                onClick={this.onAddBefore}
+                                title="Add Item Before"
+                                enabled={
+                                    ArrayElementProperties.updateStartTime.get() ==
+                                    undefined
+                                }
+                            />
+                            <IconAction
+                                icon={
+                                    <svg viewBox="0 0 24 24" fill="none">
+                                        <path
+                                            d="M12 4a1 1 0 0 1 1 1v3h3a1 1 0 1 1 0 2h-3v3a1 1 0 1 1-2 0v-3H8a1 1 0 0 1 0-2h3V5a1 1 0 0 1 1-1M3 19a1 1 0 0 1 1-1h16a1 1 0 1 1 0 2H4a1 1 0 0 1-1-1"
+                                            fill="currentColor"
+                                        />
+                                    </svg>
+                                }
+                                iconSize={18}
+                                onClick={this.onAddAfter}
+                                title="Add Item After"
+                                enabled={
+                                    ArrayElementProperties.updateStartTime.get() ==
+                                    undefined
+                                }
+                            />
+
+                            <IconAction
+                                icon="material:delete"
+                                iconSize={16}
+                                onClick={this.onDelete}
+                                title="Delete Item"
+                                enabled={
+                                    ArrayElementProperties.updateStartTime.get() ==
+                                    undefined
+                                }
+                            />
+                            <IconAction
+                                icon={
+                                    <svg
+                                        xmlns="http://www.w3.org/2000/svg"
+                                        className="icon icon-tabler icon-tabler-arrow-up"
+                                        width="24"
+                                        height="24"
+                                        viewBox="0 0 24 24"
+                                        strokeWidth="2"
+                                        stroke="currentColor"
+                                        fill="none"
+                                        strokeLinecap="round"
+                                        strokeLinejoin="round"
+                                    >
+                                        <path
+                                            stroke="none"
+                                            d="M0 0h24v24H0z"
+                                            fill="none"
+                                        ></path>
+                                        <line
+                                            x1="12"
+                                            y1="5"
+                                            x2="12"
+                                            y2="19"
+                                        ></line>
+                                        <line
+                                            x1="18"
+                                            y1="11"
+                                            x2="12"
+                                            y2="5"
+                                        ></line>
+                                        <line
+                                            x1="6"
+                                            y1="11"
+                                            x2="12"
+                                            y2="5"
+                                        ></line>
+                                    </svg>
+                                }
+                                iconSize={16}
+                                onClick={this.onMoveUp}
+                                title="Move Up"
+                                enabled={
+                                    ArrayElementProperties.updateStartTime.get() ==
+                                        undefined &&
+                                    this.objects.length > 1 &&
+                                    this.objects.indexOf(this.props.object) > 0
+                                }
+                            />
+                            <IconAction
+                                icon={
+                                    <svg
+                                        xmlns="http://www.w3.org/2000/svg"
+                                        className="icon icon-tabler icon-tabler-arrow-down"
+                                        width="24"
+                                        height="24"
+                                        viewBox="0 0 24 24"
+                                        strokeWidth="2"
+                                        stroke="currentColor"
+                                        fill="none"
+                                        strokeLinecap="round"
+                                        strokeLinejoin="round"
+                                    >
+                                        <path
+                                            stroke="none"
+                                            d="M0 0h24v24H0z"
+                                            fill="none"
+                                        ></path>
+                                        <line
+                                            x1="12"
+                                            y1="5"
+                                            x2="12"
+                                            y2="19"
+                                        ></line>
+                                        <line
+                                            x1="18"
+                                            y1="13"
+                                            x2="12"
+                                            y2="19"
+                                        ></line>
+                                        <line
+                                            x1="6"
+                                            y1="13"
+                                            x2="12"
+                                            y2="19"
+                                        ></line>
+                                    </svg>
+                                }
+                                iconSize={16}
+                                onClick={this.onMoveDown}
+                                title="Move Down"
+                                enabled={
+                                    ArrayElementProperties.updateStartTime.get() ==
+                                        undefined &&
+                                    this.objects.length > 1 &&
+                                    this.objects.indexOf(this.props.object) <
+                                        this.objects.length - 1
+                                }
+                            />
+                        </Toolbar>
                     </div>
+                    {!collapsed && (
+                        <div className="EezStudio_ArrayElementProperty_Body">
+                            {getClassInfo(this.props.object).properties.map(
+                                propertyInfo => (
+                                    <ArrayElementProperty
+                                        key={propertyInfo.name}
+                                        propertyInfo={propertyInfo}
+                                        object={this.props.object}
+                                        readOnly={this.props.readOnly}
+                                    />
+                                )
+                            )}
+                        </div>
+                    )}
                 </div>
             );
         }
     }
 );
 
-const ArrayElementPropertyVerticalOrientation = observer(
-    class ArrayElementPropertyVerticalOrientation extends React.Component<{
+const ArrayElementProperty = observer(
+    class ArrayElementProperty extends React.Component<{
         propertyInfo: PropertyInfo;
         object: IEezObject;
         readOnly: boolean;
@@ -959,10 +1266,13 @@ const ArrayElementPropertyVerticalOrientation = observer(
         render() {
             const { object, propertyInfo, readOnly } = this.props;
 
-            const className = classNames(propertyInfo.name, {
-                inError: isPropertyInError(object, propertyInfo),
-                highlighted: isHighlightedProperty(object, propertyInfo)
-            });
+            const className = classNames(
+                "EezStudio_ArrayElementProperty_Body_Property",
+                {
+                    inError: isPropertyInError(object, propertyInfo),
+                    highlighted: isHighlightedProperty(object, propertyInfo)
+                }
+            );
 
             if (isArrayElementPropertyVisible(propertyInfo, object)) {
                 if (
@@ -970,7 +1280,7 @@ const ArrayElementPropertyVerticalOrientation = observer(
                     !propertyInfo.onSelect
                 ) {
                     return (
-                        <td className={className} colSpan={2}>
+                        <div className={className}>
                             <Property
                                 propertyInfo={propertyInfo}
                                 objects={[object]}
@@ -980,157 +1290,22 @@ const ArrayElementPropertyVerticalOrientation = observer(
                                 }
                                 updateObject={this.updateObject}
                             />
-                        </td>
+                        </div>
                     );
                 } else {
-                    return (
-                        <>
-                            <td className={propertyInfo.name}>
-                                {getObjectPropertyDisplayName(
-                                    object,
-                                    propertyInfo
-                                )}
-                            </td>
-                            <td className={className}>
-                                <Property
-                                    propertyInfo={propertyInfo}
-                                    objects={[object]}
-                                    readOnly={
-                                        readOnly ||
-                                        isPropertyReadOnly(object, propertyInfo)
-                                    }
-                                    updateObject={this.updateObject}
-                                />
-                            </td>
-                        </>
+                    const propertyName = getObjectPropertyDisplayName(
+                        object,
+                        propertyInfo
                     );
-                }
-            } else {
-                return <td />;
-            }
-        }
-    }
-);
-
-////////////////////////////////////////////////////////////////////////////////
-
-const ArrayElementPropertiesHorizontalOrientation = observer(
-    class ArrayElementPropertiesHorizontalOrientation extends React.Component<{
-        itemIndex: number;
-        object: IEezObject;
-        readOnly: boolean;
-        className?: string;
-        selected: boolean;
-        selectObject: (
-            object: IEezObject,
-            select: boolean,
-            toggle: boolean
-        ) => void;
-        moveItem: (currentIndex: number, newIndex: number) => void;
-    }> {
-        static contextType = ProjectContext;
-        declare context: React.ContextType<typeof ProjectContext>;
-
-        refRow = React.createRef<HTMLTableRowElement>();
-
-        draggable = new ArrayPropertyItemDraggable(
-            "horizontal-item",
-            this.props.moveItem
-        );
-
-        componentDidMount() {
-            this.draggable.attach(this.refRow.current!);
-        }
-
-        componentWillUnmount() {
-            this.draggable.attach(null);
-        }
-
-        render() {
-            return (
-                <tr
-                    ref={this.refRow}
-                    className={classNames("horizontal-item", {
-                        selected: this.props.selected
-                    })}
-                    onClick={event => {
-                        if (
-                            event.nativeEvent.target instanceof
-                                HTMLTableCellElement ||
-                            event.nativeEvent.target instanceof
-                                HTMLTableRowElement
-                        ) {
-                            this.props.selectObject(
-                                this.props.object,
-                                true,
-                                true
-                            );
-                        } else {
-                            this.props.selectObject(
-                                this.props.object,
-                                true,
-                                false
-                            );
-                        }
-                    }}
-                    data-item-index={this.props.itemIndex}
-                >
-                    {getClassInfo(this.props.object).properties.map(
-                        propertyInfo => (
-                            <ArrayElementPropertyHorizontalOrientation
-                                key={propertyInfo.name}
-                                propertyInfo={propertyInfo}
-                                object={this.props.object}
-                                readOnly={this.props.readOnly}
-                            />
-                        )
-                    )}
-                </tr>
-            );
-        }
-    }
-);
-
-const ArrayElementPropertyHorizontalOrientation = observer(
-    class ArrayElementPropertyHorizontalOrientation extends React.Component<{
-        propertyInfo: PropertyInfo;
-        object: IEezObject;
-        readOnly: boolean;
-    }> {
-        static contextType = ProjectContext;
-        declare context: React.ContextType<typeof ProjectContext>;
-
-        updateObject = (propertyValues: Object) => {
-            let object = this.props.object;
-            if (object) {
-                if (isValue(object)) {
-                    object = getParent(object);
-                }
-                this.context.updateObject(object, propertyValues);
-            }
-        };
-
-        render() {
-            const { object, propertyInfo, readOnly } = this.props;
-
-            const className = classNames(propertyInfo.name, {
-                inError: isPropertyInError(object, propertyInfo),
-                highlighted: isHighlightedProperty(object, propertyInfo)
-            });
-
-            if (isArrayElementPropertyVisible(propertyInfo, object)) {
-                return (
-                    <td className={className}>
-                        <div
-                            style={{
-                                display: "flex",
-                                justifyContent: "center"
-                            }}
-                        >
+                    return (
+                        <div className={className}>
                             <div
-                                className="eez-flow-editor-capture-pointers"
-                                style={{ width: "100%" }}
+                                className={propertyInfo.name}
+                                title={propertyName}
                             >
+                                {propertyName}
+                            </div>
+                            <div className={propertyInfo.name}>
                                 <Property
                                     propertyInfo={propertyInfo}
                                     objects={[object]}
@@ -1142,10 +1317,10 @@ const ArrayElementPropertyHorizontalOrientation = observer(
                                 />
                             </div>
                         </div>
-                    </td>
-                );
+                    );
+                }
             } else {
-                return <td />;
+                return <div />;
             }
         }
     }

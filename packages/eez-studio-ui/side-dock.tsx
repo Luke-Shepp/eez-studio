@@ -231,6 +231,9 @@ export class LayoutModels {
     chartsViewModel3: FlexLayout.Model;
     chartsViewModel4: FlexLayout.Model;
 
+    scrapbook: FlexLayout.Model;
+    app: FlexLayout.Model;
+
     constructor() {
         makeObservable(this, {
             historyViewModel1: observable,
@@ -244,10 +247,19 @@ export class LayoutModels {
             chartsViewModel1: observable,
             chartsViewModel2: observable,
             chartsViewModel3: observable,
-            chartsViewModel4: observable
+            chartsViewModel4: observable,
+
+            scrapbook: observable,
+            app: observable
         });
 
-        this.load(undefined);
+        const sideDockLayoutModelsStr = window.localStorage.getItem(
+            "SideDockLayoutModels"
+        );
+        const sideDockLayoutModels = sideDockLayoutModelsStr
+            ? JSON.parse(sideDockLayoutModelsStr)
+            : undefined;
+        this.load(sideDockLayoutModels);
     }
 
     get models(): {
@@ -508,6 +520,101 @@ export class LayoutModels {
                 },
                 get: () => this.chartsViewModel4,
                 set: action(model => (this.chartsViewModel4 = model))
+            },
+            {
+                name: "scrapbook",
+                version: 1,
+                json: {
+                    global: LayoutModels.GLOBAL_OPTIONS,
+                    borders: [],
+                    layout: {
+                        type: "row",
+                        children: [
+                            {
+                                type: "tabset",
+                                enableTabStrip: false,
+                                enableDrag: false,
+                                enableDrop: false,
+                                enableClose: false,
+                                weight: 33,
+                                children: [
+                                    {
+                                        type: "tab",
+                                        enableClose: false,
+                                        name: "Items",
+                                        component: "items"
+                                    }
+                                ]
+                            },
+                            {
+                                type: "tabset",
+                                enableTabStrip: false,
+                                enableDrag: false,
+                                enableDrop: false,
+                                enableClose: false,
+                                weight: 67,
+                                children: [
+                                    {
+                                        type: "tab",
+                                        enableClose: false,
+                                        name: "Selected Item Info",
+                                        component: "item-details"
+                                    }
+                                ]
+                            }
+                        ]
+                    }
+                },
+                get: () => this.scrapbook,
+                set: action(model => (this.scrapbook = model))
+            },
+            {
+                name: "app",
+                version: 3,
+                json: {
+                    global: LayoutModels.GLOBAL_OPTIONS,
+                    borders: [],
+                    layout: {
+                        type: "row",
+                        children: [
+                            {
+                                type: "tabset",
+                                enableTabStrip: false,
+                                enableDrag: false,
+                                enableDrop: false,
+                                enableClose: false,
+                                weight: 75,
+                                children: [
+                                    {
+                                        type: "tab",
+                                        enableClose: false,
+                                        name: "Tabs",
+                                        component: "main-content"
+                                    }
+                                ]
+                            },
+                            {
+                                type: "tabset",
+                                enableTabStrip: true,
+                                enableDrag: false,
+                                enableDrop: false,
+                                enableClose: false,
+                                weight: 25,
+                                children: [
+                                    {
+                                        type: "tab",
+                                        icon: "svg:project-editor-scrapbook",
+                                        enableClose: false,
+                                        name: "Scrapbook",
+                                        component: "scrapbook"
+                                    }
+                                ]
+                            }
+                        ]
+                    }
+                },
+                get: () => this.app,
+                set: action(model => (this.app = model))
             }
         ];
     }
@@ -567,6 +674,13 @@ export class LayoutModels {
         }
 
         return layoutModels;
+    }
+
+    saveToLocalStorage() {
+        window.localStorage.setItem(
+            "SideDockLayoutModels",
+            JSON.stringify(this.save())
+        );
     }
 
     selectTab(model: FlexLayout.Model, tabId: string) {

@@ -181,10 +181,14 @@ registerActionComponents("Serial Port", [
             let serialConnection = new SerialConnection(id, constructorParams);
             serialConnections.set(id, serialConnection);
 
-            context.assignProperty("connection", {
-                id: serialConnection.id,
-                status: serialConnection.status
-            });
+            context.assignProperty(
+                "connection",
+                {
+                    id: serialConnection.id,
+                    status: serialConnection.status
+                },
+                undefined
+            );
 
             context.propagateValueThroughSeqout();
         }
@@ -204,8 +208,9 @@ registerActionComponents("Serial Port", [
             }
         ],
         execute: (context: IDashboardComponentContext) => {
-            const serialConnection = context.evalProperty("connection");
-            if (!serialConnection) {
+            const serialConnection =
+                context.evalProperty<SerialConnection>("connection");
+            if (!serialConnection || serialConnection.destroyed) {
                 context.throwError(`invalid connection`);
                 return;
             }
@@ -215,16 +220,21 @@ registerActionComponents("Serial Port", [
             (async (serialConnectionId: number) => {
                 let serialConnection =
                     serialConnections.get(serialConnectionId);
-                if (serialConnection) {
+                if (serialConnection && !serialConnection.destroyed) {
                     try {
                         await serialConnection.connect();
 
-                        context.setPropertyField(
-                            "connection",
-                            "id",
-                            serialConnection.id
-                        );
-                        context.propagateValueThroughSeqout();
+                        if (serialConnection.destroyed) {
+                            serialConnection.disconnect();
+                            context.throwError(`invalid connection`);
+                        } else {
+                            context.setPropertyField(
+                                "connection",
+                                "id",
+                                serialConnection.id
+                            );
+                            context.propagateValueThroughSeqout();
+                        }
                     } catch (err) {
                         context.throwError(err.toString());
                     }
@@ -267,6 +277,7 @@ registerActionComponents("Serial Port", [
 
                 if (serialConnection) {
                     serialConnection.disconnect();
+
                     context.propagateValueThroughSeqout();
                 } else {
                     context.throwError("serial connection not found");
@@ -447,45 +458,48 @@ registerObjectVariableType("SerialConnection", {
         if (serialConnection) {
             serialConnection.disconnect();
             serialConnections.delete(serialConnection.id);
+            serialConnection.destroyed = true;
         }
     },
     getValue: (variableValue: any): IObjectVariableValue | null => {
-        return serialConnections.get(variableValue.id) ?? null;
+        return variableValue
+            ? serialConnections.get(variableValue.id) ?? null
+            : null;
     },
     valueFieldDescriptions: [
         {
             name: "port",
             valueType: "string",
             getFieldValue: (value: SerialConnection): string => {
-                return value.constructorParams.port;
+                return value.port;
             }
         },
         {
             name: "baudRate",
             valueType: "integer",
             getFieldValue: (value: SerialConnection): number => {
-                return value.constructorParams.baudRate;
+                return value.baudRate;
             }
         },
         {
             name: "dataBits",
             valueType: "integer",
             getFieldValue: (value: SerialConnection): number => {
-                return value.constructorParams.dataBits;
+                return value.dataBits;
             }
         },
         {
             name: "stopBits",
             valueType: "integer",
             getFieldValue: (value: SerialConnection): number => {
-                return value.constructorParams.stopBits;
+                return value.stopBits;
             }
         },
         {
             name: "parity",
             valueType: "string",
             getFieldValue: (value: SerialConnection): string => {
-                return value.constructorParams.parity;
+                return value.parity;
             }
         },
         {
@@ -636,6 +650,24 @@ export class SerialConnection implements SerialConnectionCallbacks {
     receivedData: string | undefined;
 
     isConnected: boolean = false;
+
+    destroyed: boolean = false;
+
+    get port() {
+        return this.constructorParams.port;
+    }
+    get baudRate() {
+        return this.constructorParams.baudRate;
+    }
+    get dataBits() {
+        return this.constructorParams.dataBits;
+    }
+    get stopBits() {
+        return this.constructorParams.stopBits;
+    }
+    get parity() {
+        return this.constructorParams.parity;
+    }
 
     onRead: ((data: any) => void) | undefined;
 

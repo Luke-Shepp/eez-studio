@@ -11,7 +11,7 @@ import type { ConnectionParameters } from "instrument/connection/interface";
 import type { WebSimulatorMessageDispatcher } from "instrument/connection/connection-renderer";
 import type { ConnectionBase } from "instrument/connection/connection-base";
 
-import type { AssetsMap, ValueType } from "eez-studio-types";
+import type { AssetsMap, ValueType, ValueWithType } from "eez-studio-types";
 
 import { showSelectInstrumentDialog } from "project-editor/flow/components/actions/instrument";
 import { Flow } from "project-editor/flow/flow";
@@ -267,10 +267,15 @@ export class RemoteRuntime extends RuntimeBase {
         }
     }
 
+    cleanup() {
+        this.debuggerValues.clear();
+        this.flowStateMap.clear();
+    }
+
     async doStopRuntime(notifyUser: boolean) {
         this.stopDebugger();
 
-        this.debuggerValues.clear();
+        this.cleanup();
 
         const connection = this.connection;
         this.connection = undefined;
@@ -562,6 +567,18 @@ export class RemoteRuntime extends RuntimeBase {
         let expr = getProperty(widget, propertyName);
         return evalExpression(flowContext, widget, expr);
     }
+
+    evalPropertyWithType(
+        flowContext: IFlowContext,
+        widget: Widget,
+        propertyName: string
+    ): ValueWithType | undefined {
+        let expr = getProperty(widget, propertyName);
+        return {
+            value: evalExpression(flowContext, widget, expr),
+            valueType: "any" as const
+        };
+    }
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -605,16 +622,23 @@ export abstract class DebuggerConnectionBase {
             .split(",")
             .map(addressStr => parseInt(addressStr, 16));
 
-        const arrayType = addresses[1];
+        const arraySize = addresses[1];
+
+        const arrayType = addresses[2];
         const type = this.runtime.assetsMap.types[arrayType];
         if (!type) {
             console.error("UNEXPECTED!");
             return undefined;
         }
 
-        const arrayElementAddresses = addresses.slice(2);
+        const arrayElementAddresses = addresses.slice(3);
 
-        let value = observable(type.kind == "array" ? [] : {});
+        let value = observable(
+            type.kind == "array" ||
+                (type.kind == "basic" && type.valueType == "array:any")
+                ? new Array(arraySize)
+                : {}
+        );
 
         for (let i = 0; i < arrayElementAddresses.length; i++) {
             let propertyName: string | number;
@@ -701,6 +725,12 @@ export abstract class DebuggerConnectionBase {
             return `json (id=${Number.parseInt(str.substring(1))})`;
         }
 
+        if (str[0] == "*") {
+            return str[1] == "p"
+                ? `widget (${str.substring(2)})`
+                : `widget (id=${Number.parseInt(str.substring(2))})`;
+        }
+
         function parseFloat(str: string) {
             const buf = Buffer.alloc(8);
 
@@ -716,8 +746,12 @@ export abstract class DebuggerConnectionBase {
         }
 
         if (str[0] == "!") {
-            const time = parseFloat(str.substring(2));
-            return new Date(time);
+            if (str[1] == "!") {
+                return `event (${str.substring(2)})`;
+            } else {
+                const time = parseFloat(str.substring(1));
+                return new Date(time);
+            }
         }
 
         if (str[0] == "H") {
@@ -787,7 +821,7 @@ export abstract class DebuggerConnectionBase {
                             runtime.transition(StateMachineAction.SINGLE_STEP);
                         } else if (state == DEBUGGER_STATE_STOPPED) {
                             if (!runtime.error) {
-                                runtime.projectStore.setEditorMode();
+                                runtime.projectStore.setEditorMode(true);
                             }
                         }
                     }
@@ -1028,7 +1062,7 @@ export abstract class DebuggerConnectionBase {
                         }
 
                         const localVariable =
-                            flowState.flow.localVariables.find(
+                            flowState.flow.userPropertiesAndLocalVariables.find(
                                 localVariable =>
                                     localVariable.name ==
                                     localVariableInAssetsMap.name
@@ -1337,10 +1371,11 @@ export abstract class DebuggerConnectionBase {
                             runtime.error = errorMessage;
                         });
 
-                        runtime.stopRuntime(true);
-
                         const { flowIndex, flowState } =
                             this.getFlowState(flowStateIndex);
+
+                        runtime.stopRuntime(true);
+
                         if (!flowState) {
                             console.error("UNEXPECTED!");
                             return;
@@ -1510,15 +1545,24 @@ export abstract class DebuggerConnectionBase {
                         if (!(component instanceof InputActionComponent)) {
                             const wasmModuleId = this.runtime.getWasmModuleId();
 
-                            flowState.setComponentExecutionState(
-                                component,
-                                wasmModuleId != undefined
-                                    ? getDashboardState(
-                                          wasmModuleId,
-                                          executionState
-                                      )
-                                    : executionState
-                            );
+                            if (executionState) {
+                                let dashboardExecutionState;
+                                if (wasmModuleId != undefined) {
+                                    dashboardExecutionState = getDashboardState(
+                                        wasmModuleId,
+                                        executionState
+                                    );
+                                }
+                                flowState.setComponentExecutionState(
+                                    component,
+                                    dashboardExecutionState || executionState
+                                );
+                            } else {
+                                flowState.setComponentExecutionState(
+                                    component,
+                                    undefined
+                                );
+                            }
                         }
                     }
                     break;

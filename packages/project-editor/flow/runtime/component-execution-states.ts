@@ -1,8 +1,12 @@
+export interface IComponentExecutionState {
+    onDestroy?: () => void;
+}
+
 const wasmModuleExecutionStates = new Map<
     number,
     {
-        wasmStateToDashboardState: Map<number, any>;
-        dasboardStateToWasmState: Map<any, number>;
+        wasmStateToDashboardState: Map<number, IComponentExecutionState>;
+        dasboardStateToWasmState: Map<IComponentExecutionState, number>;
     }
 >();
 
@@ -24,10 +28,7 @@ export function registerDashboardState<T>(
     executionStates.dasboardStateToWasmState.set(dashboardState, wasmState);
 }
 
-export function getDashboardState<T>(
-    wasmModuleId: number,
-    wasmState: number
-): T | undefined {
+export function getDashboardState(wasmModuleId: number, wasmState: number) {
     let executionStates = wasmModuleExecutionStates.get(wasmModuleId);
     if (!executionStates) {
         return undefined;
@@ -37,7 +38,16 @@ export function getDashboardState<T>(
 }
 
 export function releaseRuntimeDashboardStates(wasmModuleId: number) {
-    wasmModuleExecutionStates.delete(wasmModuleId);
+    let executionStates = wasmModuleExecutionStates.get(wasmModuleId);
+    if (!executionStates) {
+        return;
+    }
+
+    for (const dashboardState of executionStates.dasboardStateToWasmState.keys()) {
+        if (dashboardState.onDestroy) {
+            dashboardState.onDestroy();
+        }
+    }
 }
 
 function freeComponentExecutionState(wasmModuleId: number, wasmState: number) {
@@ -49,6 +59,10 @@ function freeComponentExecutionState(wasmModuleId: number, wasmState: number) {
     const dashboardState =
         executionStates.wasmStateToDashboardState.get(wasmState);
     if (dashboardState) {
+        if (dashboardState.onDestroy) {
+            dashboardState.onDestroy();
+        }
+
         executionStates.wasmStateToDashboardState.delete(wasmState);
         executionStates.dasboardStateToWasmState.delete(dashboardState);
     }

@@ -13,7 +13,11 @@ import {
 import { humanize } from "eez-studio-shared/string";
 
 import { ProjectEditor } from "project-editor/project-editor-interface";
-import { EezValueObject, Message } from "project-editor/store";
+import {
+    EezValueObject,
+    getAncestorOfType,
+    Message
+} from "project-editor/store";
 import { findBitmap, findFont } from "project-editor/project/project";
 
 import type { Page } from "project-editor/features/page/page";
@@ -21,19 +25,23 @@ import type { Page } from "project-editor/features/page/page";
 import type { LVGLWidget } from "project-editor/lvgl/widgets";
 import type { LVGLPageRuntime } from "project-editor/lvgl/page-runtime";
 import type { LVGLBuild } from "project-editor/lvgl/build";
-import { LVGL_STYLE_PROP_CODES } from "project-editor/lvgl/lvgl-versions";
+import { LVGL_STYLE_PROP_CODES } from "project-editor/lvgl/lvgl-constants";
 import {
     BUILT_IN_FONTS,
+    grid_column_dsc_array_property_info,
+    grid_row_dsc_array_property_info,
     lvglPropertiesMap,
     LVGLPropertyInfo,
     text_font_property_info
 } from "project-editor/lvgl/style-catalog";
 import {
-    colorRgbToHexNumStr,
-    colorRgbToNum,
     getSelectorBuildCode,
     getSelectorCode
 } from "project-editor/lvgl/style-helper";
+import { getLvglCoord } from "./lvgl-versions";
+import { getThemedColor } from "project-editor/features/style/theme";
+import { isValid } from "eez-studio-shared/color";
+import type { LVGLStyle } from "./style";
 
 ////////////////////////////////////////////////////////////////////////////////
 
@@ -89,7 +97,40 @@ export class LVGLStylesDefinition extends EezObject {
                 }
             }
         ],
-        defaultValue: {}
+        defaultValue: {},
+
+        beforeLoadHook(object, jsObject) {
+            if (jsObject.definition) {
+                Object.keys(jsObject.definition).forEach(part => {
+                    Object.keys(jsObject.definition[part]).forEach(state => {
+                        Object.keys(jsObject.definition[part][state]).forEach(
+                            propertyName => {
+                                if (
+                                    propertyName == "grid_column_align" ||
+                                    propertyName == "grid_row_align" ||
+                                    propertyName == "grid_cell_x_align" ||
+                                    propertyName == "grid_cell_y_align"
+                                ) {
+                                    const value =
+                                        jsObject.definition[part][state][
+                                            propertyName
+                                        ];
+                                    if (
+                                        value == "EVENLY" ||
+                                        value == "AROUND" ||
+                                        value == "BETWEEN"
+                                    ) {
+                                        jsObject.definition[part][state][
+                                            propertyName
+                                        ] = "SPACE_" + value;
+                                    }
+                                }
+                            }
+                        );
+                    });
+                });
+            }
+        }
     };
 
     override makeEditable() {
@@ -129,16 +170,56 @@ export class LVGLStylesDefinition extends EezObject {
         value: any
     ) {
         let def = this.definition;
-        return {
-            ...(def || {}),
-            [part]: {
-                ...(def || {})[part],
-                [state]: {
-                    ...((def || {})[part] || {})[state],
-                    [propertyInfo.name]: value
+
+        function add(
+            def: Definition | undefined,
+            propertyInfo: LVGLPropertyInfo,
+            part: string,
+            state: string,
+            value: any
+        ) {
+            return {
+                ...(def || {}),
+                [part]: {
+                    ...(def || {})[part],
+                    [state]: {
+                        ...((def || {})[part] || {})[state],
+                        [propertyInfo.name]: value
+                    }
                 }
+            };
+        }
+
+        if (propertyInfo.name == "layout" && value == "GRID") {
+            if (
+                def?.[part]?.[state]?.[grid_row_dsc_array_property_info.name] ==
+                undefined
+            ) {
+                def = add(
+                    def,
+                    grid_row_dsc_array_property_info,
+                    part,
+                    state,
+                    ""
+                );
             }
-        };
+
+            if (
+                def?.[part]?.[state]?.[
+                    grid_column_dsc_array_property_info.name
+                ] == undefined
+            ) {
+                def = add(
+                    def,
+                    grid_column_dsc_array_property_info,
+                    part,
+                    state,
+                    ""
+                );
+            }
+        }
+
+        return add(def, propertyInfo, part, state, value);
     }
 
     static combineDefinitions(
@@ -237,14 +318,46 @@ export class LVGLStylesDefinition extends EezObject {
 
     check(messages: IMessage[]) {
         if (this.definition) {
+            const projectStore = ProjectEditor.getProjectStore(this);
+
             Object.keys(this.definition).forEach(part => {
                 Object.keys(this.definition[part]).forEach(state => {
                     Object.keys(this.definition[part][state]).forEach(
                         propertyName => {
                             const propertyInfo =
                                 lvglPropertiesMap.get(propertyName);
+
                             if (!propertyInfo) {
                                 return;
+                            }
+
+                            if (propertyInfo.type == PropertyType.ThemedColor) {
+                                const color =
+                                    this.definition[part][state][propertyName];
+
+                                if (color) {
+                                    const colorValue = getThemedColor(
+                                        projectStore,
+                                        color
+                                    ).colorValue;
+
+                                    if (!isValid(colorValue)) {
+                                        const valueObject =
+                                            EezValueObject.create(
+                                                this,
+                                                propertyInfo,
+                                                color
+                                            );
+
+                                        messages.push(
+                                            new Message(
+                                                MessageType.ERROR,
+                                                `invalid color`,
+                                                valueObject
+                                            )
+                                        );
+                                    }
+                                }
                             }
 
                             if (
@@ -339,12 +452,12 @@ export class LVGLStylesDefinition extends EezObject {
             return;
         }
 
-        const lvglVersion =
-            ProjectEditor.getProject(widget).settings.general.lvglVersion;
+        const projectStore = ProjectEditor.getProjectStore(widget);
+        const lvglVersion = projectStore.project.settings.general.lvglVersion;
 
         Object.keys(this.definition).forEach(part => {
             Object.keys(this.definition[part]).forEach(state => {
-                const selectorCode = getSelectorCode(part, state);
+                const selectorCode = getSelectorCode(this, part, state);
                 Object.keys(this.definition[part][state]).forEach(
                     propertyName => {
                         const propertyInfo =
@@ -361,15 +474,18 @@ export class LVGLStylesDefinition extends EezObject {
                             this.definition[part][state][propertyName];
 
                         if (propertyInfo.type == PropertyType.ThemedColor) {
-                            const colorValue = colorRgbToNum(value);
-
-                            runtime.wasm._lvglObjSetLocalStylePropColor(
-                                obj,
-                                runtime.getLvglStylePropCode(
-                                    propertyInfo.lvglStyleProp.code
-                                ),
-                                colorValue,
-                                selectorCode
+                            runtime.lvglSetAndUpdateColor(
+                                value,
+                                (wasm, colorNum) => {
+                                    wasm._lvglObjSetLocalStylePropColor(
+                                        obj,
+                                        runtime.getLvglStylePropCode(
+                                            propertyInfo.lvglStyleProp.code
+                                        ),
+                                        colorNum,
+                                        selectorCode
+                                    );
+                                }
                             );
                         } else if (
                             propertyInfo.type == PropertyType.Number ||
@@ -412,7 +528,8 @@ export class LVGLStylesDefinition extends EezObject {
                                 const numValue = propertyInfo.lvglStyleProp
                                     .valueToNum
                                     ? propertyInfo.lvglStyleProp.valueToNum(
-                                          value
+                                          value,
+                                          runtime
                                       )
                                     : value;
 
@@ -425,6 +542,31 @@ export class LVGLStylesDefinition extends EezObject {
                                     selectorCode
                                 );
                             }
+                        } else if (
+                            propertyInfo.type ==
+                            PropertyType.NumberArrayAsString
+                        ) {
+                            const arrValue: number[] = propertyInfo
+                                .lvglStyleProp.valueToNum
+                                ? propertyInfo.lvglStyleProp.valueToNum(
+                                      value,
+                                      runtime
+                                  )
+                                : value;
+
+                            const { LV_COORD_MAX } = getLvglCoord(widget);
+                            const LV_GRID_TEMPLATE_LAST = LV_COORD_MAX;
+
+                            arrValue.push(LV_GRID_TEMPLATE_LAST);
+
+                            runtime.wasm._lvglObjSetLocalStylePropPtr(
+                                obj,
+                                runtime.getLvglStylePropCode(
+                                    propertyInfo.lvglStyleProp.code
+                                ),
+                                runtime.allocateInt32Array(arrValue, true),
+                                selectorCode
+                            );
                         } else if (propertyInfo.type == PropertyType.Boolean) {
                             const numValue = value ? 1 : 0;
 
@@ -485,12 +627,43 @@ export class LVGLStylesDefinition extends EezObject {
                             this.definition[part][state][propertyName];
 
                         if (propertyInfo.type == PropertyType.ThemedColor) {
-                            build.line(
-                                `lv_obj_set_style_${build.getStylePropName(
-                                    propertyInfo.name
-                                )}(obj, lv_color_hex(${colorRgbToHexNumStr(
-                                    this.definition[part][state][propertyName]
-                                )}), ${selectorCode});`
+                            build.buildColor(
+                                this,
+                                this.definition[part][state][propertyName],
+                                () => {
+                                    return build.getLvglObjectAccessor(
+                                        getAncestorOfType<LVGLWidget>(
+                                            this,
+                                            ProjectEditor.LVGLWidgetClass
+                                                .classInfo
+                                        )!
+                                    );
+                                },
+                                (color: string) => {
+                                    build.line(
+                                        `lv_obj_set_style_${build.getStylePropName(
+                                            propertyInfo.name
+                                        )}(obj, lv_color_hex(${color}), ${selectorCode});`
+                                    );
+                                },
+                                (color: string, obj) => {
+                                    if (
+                                        build.project.settings.build
+                                            .screensLifetimeSupport
+                                    ) {
+                                        build.line(
+                                            `if (${obj}) lv_obj_set_style_${build.getStylePropName(
+                                                propertyInfo.name
+                                            )}(${obj}, lv_color_hex(${color}), ${selectorCode});`
+                                        );
+                                    } else {
+                                        build.line(
+                                            `lv_obj_set_style_${build.getStylePropName(
+                                                propertyInfo.name
+                                            )}(${obj}, lv_color_hex(${color}), ${selectorCode});`
+                                        );
+                                    }
+                                }
                             );
                         } else if (
                             propertyInfo.type == PropertyType.Number ||
@@ -515,7 +688,7 @@ export class LVGLStylesDefinition extends EezObject {
                                         build.line(
                                             `lv_obj_set_style_${build.getStylePropName(
                                                 propertyInfo.name
-                                            )}(obj, &${build.getFontVariableName(
+                                            )}(obj, ${build.getFontAccessor(
                                                 font
                                             )}, ${selectorCode});`
                                         );
@@ -535,6 +708,30 @@ export class LVGLStylesDefinition extends EezObject {
                                     )}(obj, ${numValue}, ${selectorCode});`
                                 );
                             }
+                        } else if (
+                            propertyInfo.type ==
+                            PropertyType.NumberArrayAsString
+                        ) {
+                            let dsc = propertyInfo.lvglStyleProp.valueBuild
+                                ? propertyInfo.lvglStyleProp.valueBuild(value)
+                                : "";
+
+                            if (dsc) {
+                                dsc += ", ";
+                            }
+
+                            dsc += "LV_GRID_TEMPLATE_LAST";
+
+                            build.blockStart("{");
+                            build.line(`static lv_coord_t dsc[] = {${dsc}};`);
+
+                            build.line(
+                                `lv_obj_set_style_${build.getStylePropName(
+                                    propertyInfo.name
+                                )}(obj, dsc, ${selectorCode});`
+                            );
+
+                            build.blockEnd("}");
                         } else if (propertyInfo.type == PropertyType.Boolean) {
                             const numValue = value ? "true" : "false";
 
@@ -551,7 +748,7 @@ export class LVGLStylesDefinition extends EezObject {
                             build.line(
                                 `lv_obj_set_style_${build.getStylePropName(
                                     propertyInfo.name
-                                )}(obj, &${build.getImageVariableName(
+                                )}(obj, ${build.getImageAccessor(
                                     value
                                 )}, ${selectorCode});`
                             );
@@ -560,6 +757,128 @@ export class LVGLStylesDefinition extends EezObject {
                 );
             });
         });
+    }
+
+    lvglBuildStyle(
+        build: LVGLBuild,
+        lvglStyle: LVGLStyle,
+        part: string,
+        state: string
+    ) {
+        Object.keys(this.definition?.[part]?.[state] ?? {}).forEach(
+            propertyName => {
+                const propertyInfo = lvglPropertiesMap.get(propertyName);
+                if (!propertyInfo) {
+                    return;
+                }
+
+                const value = this.definition[part][state][propertyName];
+
+                if (propertyInfo.type == PropertyType.ThemedColor) {
+                    build.buildColor(
+                        this,
+                        this.definition[part][state][propertyName],
+                        () => {},
+                        color => {
+                            build.line(
+                                `lv_style_set_${build.getStylePropName(
+                                    propertyInfo.name
+                                )}(style, lv_color_hex(${color}));`
+                            );
+                        },
+                        color => {
+                            build.line(
+                                `lv_style_set_${build.getStylePropName(
+                                    propertyInfo.name
+                                )}(${build.getGetStyleFunctionName(
+                                    lvglStyle,
+                                    part,
+                                    state
+                                )}(), lv_color_hex(${color}));`
+                            );
+                        }
+                    );
+                } else if (
+                    propertyInfo.type == PropertyType.Number ||
+                    propertyInfo.type == PropertyType.Enum
+                ) {
+                    if (propertyInfo == text_font_property_info) {
+                        const index = BUILT_IN_FONTS.indexOf(value);
+                        if (index != -1) {
+                            build.line(
+                                `lv_style_set_${build.getStylePropName(
+                                    propertyInfo.name
+                                )}(style, &lv_font_${(
+                                    value as string
+                                ).toLowerCase()});`
+                            );
+                        } else {
+                            const font = findFont(
+                                ProjectEditor.getProject(this),
+                                value
+                            );
+                            if (font) {
+                                build.line(
+                                    `lv_style_set_${build.getStylePropName(
+                                        propertyInfo.name
+                                    )}(style, ${build.getFontAccessor(font)});`
+                                );
+                            }
+                        }
+                    } else {
+                        const numValue = propertyInfo.lvglStyleProp.valueBuild
+                            ? propertyInfo.lvglStyleProp.valueBuild(value)
+                            : value;
+
+                        build.line(
+                            `lv_style_set_${build.getStylePropName(
+                                propertyInfo.name
+                            )}(style, ${numValue});`
+                        );
+                    }
+                } else if (
+                    propertyInfo.type == PropertyType.NumberArrayAsString
+                ) {
+                    let dsc = propertyInfo.lvglStyleProp.valueBuild
+                        ? propertyInfo.lvglStyleProp.valueBuild(value)
+                        : "";
+
+                    if (dsc) {
+                        dsc += ", ";
+                    }
+
+                    dsc += "LV_GRID_TEMPLATE_LAST";
+
+                    build.blockStart("{");
+                    build.line(`static lv_coord_t dsc[] = {${dsc}};`);
+
+                    build.line(
+                        `lv_style_set_${build.getStylePropName(
+                            propertyInfo.name
+                        )}(style, dsc);`
+                    );
+
+                    build.blockEnd("}");
+                } else if (propertyInfo.type == PropertyType.Boolean) {
+                    const numValue = value ? "true" : "false";
+
+                    build.line(
+                        `lv_style_set_${build.getStylePropName(
+                            propertyInfo.name
+                        )}(style, ${numValue});`
+                    );
+                } else if (
+                    propertyInfo.type == PropertyType.ObjectReference &&
+                    propertyInfo.referencedObjectCollectionPath == "bitmaps"
+                ) {
+                    build.line(
+                        `lv_style_set_${build.getStylePropName(
+                            propertyInfo.name
+                        )}(style, ${build.getImageAccessor(value)});`
+                    );
+                }
+            }
+        );
     }
 
     get hasModifications() {

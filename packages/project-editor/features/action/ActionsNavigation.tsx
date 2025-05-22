@@ -27,7 +27,11 @@ export const ActionComponents = observer(
         }
 
         componentDidMount() {
-            this.context.navigationStore.setInitialSelectedPanel(this);
+            this.context.navigationStore.mountPanel(this);
+        }
+
+        componentWillUnmount() {
+            this.context.navigationStore.unmountPanel(this);
         }
 
         get actionFlowTabState() {
@@ -88,14 +92,26 @@ export const ActionComponents = observer(
 
             return [];
         }
+        canCut() {
+            return this.treeAdapter ? this.treeAdapter.canCut() : false;
+        }
         cutSelection() {
             this.treeAdapter!.cutSelection();
+        }
+        canCopy() {
+            return this.treeAdapter ? this.treeAdapter.canCopy() : false;
         }
         copySelection() {
             this.treeAdapter!.copySelection();
         }
+        canPaste() {
+            return this.treeAdapter ? this.treeAdapter.canPaste() : false;
+        }
         pasteSelection() {
             this.treeAdapter!.pasteSelection();
+        }
+        canDelete() {
+            return this.treeAdapter ? this.treeAdapter.canDelete() : false;
         }
         deleteSelection() {
             this.treeAdapter!.deleteSelection();
@@ -104,12 +120,6 @@ export const ActionComponents = observer(
             this.context.navigationStore.setSelectedPanel(this);
         };
         //
-
-        componentWillUnmount() {
-            if (this.context.navigationStore.selectedPanel === this) {
-                this.context.navigationStore.setSelectedPanel(undefined);
-            }
-        }
 
         renderItem = (itemId: string) => {
             if (!this.treeAdapter) {

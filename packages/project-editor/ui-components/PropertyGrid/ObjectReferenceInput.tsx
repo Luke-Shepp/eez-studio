@@ -11,6 +11,7 @@ import { ProjectContext } from "project-editor/project/context";
 import { IEezObject, PropertyInfo } from "project-editor/core/object";
 import { findBitmap } from "project-editor/project/project";
 import { SortDirectionType } from "project-editor/core/objectAdapter";
+import { getEnumItems } from "./utils";
 
 ////////////////////////////////////////////////////////////////////////////////
 
@@ -53,6 +54,22 @@ export const ObjectReferenceInput = observer(
         getObjectNames() {
             const { propertyInfo } = this.props;
 
+            if (!propertyInfo.referencedObjectCollectionPath) {
+                if (propertyInfo.enumItems) {
+                    return getEnumItems(this.props.objects, propertyInfo)
+                        .filter(
+                            enumItem =>
+                                (enumItem.label || enumItem.id.toString())
+                                    .toLowerCase()
+                                    .indexOf(
+                                        this.searchText.trim().toLowerCase()
+                                    ) != -1
+                        )
+                        .map(enumItem => enumItem.id);
+                }
+                return [];
+            }
+
             let assets = this.context.project._assets.maps[
                 "name"
             ].getAllObjectsOfType(propertyInfo.referencedObjectCollectionPath!);
@@ -73,7 +90,7 @@ export const ObjectReferenceInput = observer(
                         !this.searchText ||
                         objectName
                             .toLowerCase()
-                            .indexOf(this.searchText.toLowerCase()) != -1
+                            .indexOf(this.searchText.trim().toLowerCase()) != -1
                 )
                 .sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase()));
         }
@@ -83,7 +100,7 @@ export const ObjectReferenceInput = observer(
         };
 
         onSearchChange(event: any) {
-            this.searchText = ($(event.target).val() as string).trim();
+            this.searchText = $(event.target).val() as string;
         }
 
         setDropDownOpen(open: boolean) {
@@ -162,6 +179,33 @@ export const ObjectReferenceInput = observer(
             }
         });
 
+        renderBitmap(objectName: string | number) {
+            if (typeof objectName != "string") {
+                return null;
+            }
+
+            if (
+                this.props.propertyInfo.referencedObjectCollectionPath !==
+                "bitmaps"
+            ) {
+                return null;
+            }
+
+            const bitmap = findBitmap(this.context.project, objectName);
+            if (!bitmap || !bitmap.imageSrc || !bitmap.imageElement) {
+                return null;
+            }
+
+            return (
+                <img
+                    src={bitmap.imageSrc}
+                    style={{
+                        backgroundColor: bitmap.backgroundColor
+                    }}
+                />
+            );
+        }
+
         render() {
             const { value, readOnly } = this.props;
 
@@ -198,6 +242,7 @@ export const ObjectReferenceInput = observer(
                                         this.setDropDownOpen(false);
                                     })}
                                 >
+                                    {this.renderBitmap(objectName)}
                                     {objectName}
                                 </li>
                             ))}
@@ -225,11 +270,8 @@ export const ObjectReferenceInput = observer(
                     : "";
 
             return (
-                <>
-                    <div
-                        className="input-group"
-                        style={{ position: "relative" }}
-                    >
+                <div style={{ width: "100%" }}>
+                    <div className="input-group">
                         <input
                             className="form-control"
                             type="text"
@@ -269,7 +311,7 @@ export const ObjectReferenceInput = observer(
                             </div>
                         </div>
                     )}
-                </>
+                </div>
             );
         }
     }

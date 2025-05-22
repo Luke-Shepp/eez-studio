@@ -1605,25 +1605,28 @@ class WidgetTimelinePath {
     }
 
     get offsetToCenter() {
-        let {
-            left: left1,
-            top: top1,
-            width,
-            height
-        } = this.widget.getTimelineRect(this.timelinePosition);
+        let timeLineRect = this.widget.getTimelineRect(this.timelinePosition);
 
         let x;
         let y;
 
         if (this.widget instanceof ProjectEditor.LVGLWidgetClass) {
             // For the LVGL widget, the relative position changes when the timeline position changes.
-            let { left: left2, top: top2 } = this.widget.relativePosition;
+            // const relativePosition = this.widget.relativePosition;
+            // x =
+            //     relativePosition.left -
+            //     timeLineRect.left +
+            //     timeLineRect.width / 2;
+            // y =
+            //     relativePosition.top -
+            //     timeLineRect.top +
+            //     timeLineRect.height / 2;
 
-            x = left2 - left1 + width / 2;
-            y = top2 - top1 + height / 2;
+            x = timeLineRect.width / 2;
+            y = timeLineRect.height / 2;
         } else {
-            x = width / 2;
-            y = height / 2;
+            x = timeLineRect.width / 2;
+            y = timeLineRect.height / 2;
         }
 
         const parent = ProjectEditor.getWidgetParent(this.widget);
@@ -1748,7 +1751,7 @@ class WidgetTimelinePath {
 }
 
 export class WidgetTimelinePathEditorHandler extends MouseHandlerWithSnapLines {
-    static CLASS_NAME = "widget-timeline-path-editor-ha ndle";
+    static CLASS_NAME = "widget-timeline-path-editor-handle";
     static DATA_ATTR_NAME = "data-handle-id";
 
     cursor: string = "grabbing";
@@ -2072,8 +2075,8 @@ export class WidgetTimelinePathEditorHandler extends MouseHandlerWithSnapLines {
         }
     }
 
-    up(context: IFlowContext) {
-        super.up(context);
+    up(context: IFlowContext, cancel: boolean) {
+        super.up(context, cancel);
         context.projectStore.undoManager.setCombineCommands(false);
     }
 }
@@ -2942,6 +2945,7 @@ export function getTimelineProperty(
                     page._lvglRuntime,
                     widget._lvglObj,
                     "MAIN",
+                    "DEFAULT",
                     stylePropertyInfo
                 ) as number;
             }
@@ -3235,12 +3239,18 @@ export function lvglBuildPageTimeline(build: LVGLBuild, page: Page) {
         {
             name: "scale",
             lvglName: "scale",
-            lvglStylePropName: "TRANSFORM_ZOOM"
+            lvglStylePropName:
+                build.project.settings.general.lvglVersion == "9.0"
+                    ? "TRANSFORM_SCALE_X"
+                    : "TRANSFORM_ZOOM"
         },
         {
             name: "rotate",
             lvglName: "rotate",
-            lvglStylePropName: "TRANSFORM_ANGLE",
+            lvglStylePropName:
+                build.project.settings.general.lvglVersion == "9.0"
+                    ? "TRANSFORM_ROTATION"
+                    : "TRANSFORM_ANGLE",
             lvglFromValue: (value: string) => value,
             lvglToValue: (value: string) => value
         }
@@ -3561,6 +3571,15 @@ export function lvglBuildPageTimeline(build: LVGLBuild, page: Page) {
                                 build.line(
                                     `lv_obj_set_local_style_prop(obj, LV_STYLE_${keyframeProperty.lvglStylePropName}, value, LV_PART_MAIN);`
                                 );
+
+                                if (
+                                    keyframeProperty.lvglStylePropName ==
+                                    "TRANSFORM_SCALE_X"
+                                ) {
+                                    build.line(
+                                        `lv_obj_set_local_style_prop(obj, LV_STYLE_TRANSFORM_SCALE_Y, value, LV_PART_MAIN);`
+                                    );
+                                }
                             }
 
                             build.unindent();
@@ -3572,6 +3591,7 @@ export function lvglBuildPageTimeline(build: LVGLBuild, page: Page) {
                 build.unindent();
             }
             build.line(`}`);
+            build.unindent();
         }
         build.line(`}`);
     }

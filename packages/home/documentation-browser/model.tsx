@@ -28,8 +28,6 @@ import {
     ClassInfo,
     getObjectPropertyDisplayName,
     isProperSubclassOf,
-    LVGL_FLAG_CODES,
-    LVGL_STATE_CODES,
     PropertyType
 } from "project-editor/core/object";
 import {
@@ -52,13 +50,18 @@ import {
     getOutputDisplayName
 } from "project-editor/flow/helper";
 import { Icon } from "eez-studio-ui/icon";
-import { flagsGroup, statesGroup } from "project-editor/lvgl/widgets";
+import { LVGLScreenWidget } from "project-editor/lvgl/widgets";
+import { flagsGroup, statesGroup } from "project-editor/lvgl/widgets/Base";
 import {
     AppViewWidget,
     CanvasWidget,
     ListGraphWidget,
     YTGraphWidget
 } from "project-editor/flow/components/widgets/eez-gui";
+import {
+    LVGL_FLAG_CODES,
+    LVGL_STATE_CODES
+} from "project-editor/lvgl/lvgl-constants";
 
 interface ProjectTypeNodeData {
     id: string;
@@ -231,7 +234,9 @@ class Model {
                 properties = properties.slice();
 
                 properties.splice(
-                    properties.findIndex(property => property.name == "flags"),
+                    properties.findIndex(
+                        property => property.name == "widgetFlags"
+                    ),
                     1,
                     ...Object.keys(LVGL_FLAG_CODES)
                         .filter(
@@ -267,12 +272,21 @@ class Model {
                 properties = properties.slice();
 
                 properties.splice(
-                    properties.findIndex(property => property.name == "flags"),
+                    properties.findIndex(
+                        property => property.name == "widgetFlags"
+                    ),
                     1
                 );
 
                 properties.splice(
                     properties.findIndex(property => property.name == "states"),
+                    1
+                );
+
+                properties.splice(
+                    properties.findIndex(
+                        property => property.name == "localStyles"
+                    ),
                     1
                 );
             }
@@ -376,13 +390,17 @@ class Model {
                 componentClass.objectClass.classInfo ==
                     CanvasWidget.classInfo ||
                 componentClass.objectClass.classInfo ==
-                    ListGraphWidget.classInfo
+                    ListGraphWidget.classInfo ||
+                componentClass.objectClass.classInfo ==
+                    LVGLScreenWidget.classInfo
             ) {
                 continue;
             }
 
-            let { label, icon, titleStyle } =
-                getComponentVisualData(componentClass);
+            let { label, icon, titleStyle } = getComponentVisualData(
+                componentClass,
+                undefined // projectStore is undefined here
+            );
 
             const componentInfoType = isProperSubclassOf(
                 componentClass.objectClass.classInfo,

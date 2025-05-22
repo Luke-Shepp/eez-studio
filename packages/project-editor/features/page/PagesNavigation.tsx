@@ -1,5 +1,5 @@
 import React from "react";
-import { computed, makeObservable } from "mobx";
+import { action, computed, makeObservable } from "mobx";
 import { observer } from "mobx-react";
 
 import { IEezObject } from "project-editor/core/object";
@@ -71,7 +71,11 @@ export const PageStructure = observer(
         }
 
         componentDidMount() {
-            this.context.navigationStore.setInitialSelectedPanel(this);
+            this.context.navigationStore.mountPanel(this);
+        }
+
+        componentWillUnmount() {
+            this.context.navigationStore.unmountPanel(this);
         }
 
         get pageTabState() {
@@ -106,7 +110,18 @@ export const PageStructure = observer(
                 (object: IEezObject) => {
                     return object instanceof ProjectEditor.WidgetClass;
                 },
-                true
+                true,
+                undefined,
+                undefined,
+                undefined,
+                undefined,
+                undefined,
+                undefined,
+                // Argument hideRootItem is true in case of LVGL page, ie root LVGLScreenWidget is hidden for the users.
+                this.context.projectTypeTraits.isLVGL &&
+                this.pageTabState?.page.lvglScreenWidget
+                    ? true
+                    : false
             );
         }
 
@@ -129,27 +144,38 @@ export const PageStructure = observer(
 
             return [];
         }
+        canCut() {
+            return this.treeAdapter ? this.treeAdapter.canCut() : false;
+        }
         cutSelection() {
             this.treeAdapter!.cutSelection();
+        }
+        canCopy() {
+            return this.treeAdapter ? this.treeAdapter.canCopy() : false;
         }
         copySelection() {
             this.treeAdapter!.copySelection();
         }
+        canPaste() {
+            return this.treeAdapter ? this.treeAdapter.canPaste() : false;
+        }
         pasteSelection() {
             this.treeAdapter!.pasteSelection();
+        }
+        canDelete() {
+            return this.treeAdapter ? this.treeAdapter.canDelete() : false;
         }
         deleteSelection() {
             this.treeAdapter!.deleteSelection();
         }
+        selectAll() {
+            this.treeAdapter!.selectItems(
+                this.treeAdapter!.allRows.map(row => row.item)
+            );
+        }
         onFocus = () => {
             this.context.navigationStore.setSelectedPanel(this);
         };
-
-        componentWillUnmount() {
-            if (this.context.navigationStore.selectedPanel === this) {
-                this.context.navigationStore.setSelectedPanel(undefined);
-            }
-        }
 
         get isAnyLocked() {
             if (!this.treeAdapter) {
@@ -164,7 +190,7 @@ export const PageStructure = observer(
             );
         }
 
-        onLockAll = () => {
+        onLockAll = action(() => {
             if (!this.treeAdapter) {
                 return;
             }
@@ -181,9 +207,9 @@ export const PageStructure = observer(
             });
 
             this.context.undoManager.setCombineCommands(false);
-        };
+        });
 
-        onUnlockAll = () => {
+        onUnlockAll = action(() => {
             if (!this.treeAdapter) {
                 return;
             }
@@ -200,7 +226,7 @@ export const PageStructure = observer(
             });
 
             this.context.undoManager.setCombineCommands(false);
-        };
+        });
 
         get isAnyHidden() {
             if (!this.treeAdapter) {
@@ -215,7 +241,7 @@ export const PageStructure = observer(
             );
         }
 
-        onHideAll = () => {
+        onHideAll = action(() => {
             if (!this.treeAdapter) {
                 return;
             }
@@ -232,9 +258,9 @@ export const PageStructure = observer(
             });
 
             this.context.undoManager.setCombineCommands(false);
-        };
+        });
 
-        onShowAll = () => {
+        onShowAll = action(() => {
             if (!this.treeAdapter) {
                 return;
             }
@@ -251,7 +277,7 @@ export const PageStructure = observer(
             });
 
             this.context.undoManager.setCombineCommands(false);
-        };
+        });
 
         renderItem = (itemId: string) => {
             if (!this.treeAdapter) {
@@ -281,11 +307,11 @@ export const PageStructure = observer(
                                     : "Lock this widget"
                             }
                             iconSize={14}
-                            onClick={() =>
+                            onClick={action(() =>
                                 this.context.updateObject(widget, {
                                     locked: !widget.locked
                                 })
-                            }
+                            )}
                             style={{
                                 visibility: widget.locked ? "visible" : "hidden"
                             }}
@@ -298,7 +324,7 @@ export const PageStructure = observer(
                             }
                             title={widget.hiddenInEditor ? "Show" : "Hide"}
                             iconSize={14}
-                            onClick={() => {
+                            onClick={action(() => {
                                 const hiddenInEditor = !widget.hiddenInEditor;
 
                                 this.context.undoManager.setCombineCommands(
@@ -328,7 +354,7 @@ export const PageStructure = observer(
                                 this.context.undoManager.setCombineCommands(
                                     false
                                 );
-                            }}
+                            })}
                             style={{
                                 visibility: widget.hiddenInEditor
                                     ? "visible"
@@ -344,7 +370,28 @@ export const PageStructure = observer(
             return this.treeAdapter ? (
                 <VerticalHeaderWithBody className="EezStudio_PageStructure">
                     <ToolbarHeader>
-                        <Toolbar>
+                        <Toolbar style={{ minHeight: 38 }}>
+                            {this.isAnyHidden ? (
+                                <label className="EezStudio_PageStructure_HiddenWidgetLines">
+                                    <span>Hidden widget lines</span>
+                                    <select
+                                        className="form-select"
+                                        value={
+                                            this.context.project.settings
+                                                .general.hiddenWidgetLines
+                                        }
+                                        onChange={action(event => {
+                                            this.context.project.settings.general.hiddenWidgetLines =
+                                                event.target.value as any;
+                                        })}
+                                        style={{ margin: "2px 10px 2px 5px" }}
+                                    >
+                                        <option value="visible">Visible</option>
+                                        <option value="dimmed">Dimmed</option>
+                                        <option value="hidden">Hidden</option>
+                                    </select>
+                                </label>
+                            ) : null}
                             <IconAction
                                 title={
                                     this.isAnyLocked ? "Unlock All" : "Lock All"
@@ -386,7 +433,12 @@ export const PageStructure = observer(
                         />
                     </Body>
                 </VerticalHeaderWithBody>
-            ) : null;
+            ) : (
+                <div
+                    className="EezStudio_PageStructure_NoPageSelected"
+                    onContextMenu={e => e.preventDefault()}
+                ></div>
+            );
         }
     }
 );
@@ -407,7 +459,11 @@ export const ActionComponents = observer(
         }
 
         componentDidMount() {
-            this.context.navigationStore.setInitialSelectedPanel(this);
+            this.context.navigationStore.mountPanel(this);
+        }
+
+        componentWillUnmount() {
+            this.context.navigationStore.unmountPanel(this);
         }
 
         get pageTabState() {
@@ -468,14 +524,26 @@ export const ActionComponents = observer(
 
             return [];
         }
+        canCut() {
+            return this.treeAdapter ? this.treeAdapter.canCut() : false;
+        }
         cutSelection() {
             this.treeAdapter!.cutSelection();
+        }
+        canCopy() {
+            return this.treeAdapter ? this.treeAdapter.canCopy() : false;
         }
         copySelection() {
             this.treeAdapter!.copySelection();
         }
+        canPaste() {
+            return this.treeAdapter ? this.treeAdapter.canPaste() : false;
+        }
         pasteSelection() {
             this.treeAdapter!.pasteSelection();
+        }
+        canDelete() {
+            return this.treeAdapter ? this.treeAdapter.canDelete() : false;
         }
         deleteSelection() {
             this.treeAdapter!.deleteSelection();
@@ -483,12 +551,6 @@ export const ActionComponents = observer(
         onFocus = () => {
             this.context.navigationStore.setSelectedPanel(this);
         };
-
-        componentWillUnmount() {
-            if (this.context.navigationStore.selectedPanel === this) {
-                this.context.navigationStore.setSelectedPanel(undefined);
-            }
-        }
 
         renderItem = (itemId: string) => {
             if (!this.treeAdapter) {

@@ -528,6 +528,24 @@ export const builtInFunctions: {
             return "string";
         }
     },
+    "Flow.themes": {
+        operationIndex: 89,
+        arity: 0,
+        args: [],
+        eval: (
+            expressionContext: IExpressionContext | undefined,
+            ...args: any[]
+        ) => {
+            const themes = expressionContext?.projectStore.project.themes;
+            if (themes) {
+                return themes.map(theme => theme.name);
+            }
+            return [];
+        },
+        getValueType: (...args: ValueType[]) => {
+            return "array:string";
+        }
+    },
     "Flow.parseInteger": {
         operationIndex: 31,
         arity: 1,
@@ -599,7 +617,25 @@ export const builtInFunctions: {
                 : undefined,
         getValueType: (...args: ValueType[]) => {
             return "blob";
-        }
+        },
+        enabled: projectStore => !projectStore.projectTypeTraits.isLVGL
+    },
+
+    "Flow.getBitmapAsDataURL": {
+        operationIndex: 78,
+        arity: 1,
+        args: ["bitmapName"],
+        eval: (
+            expressionContext: IExpressionContext | undefined,
+            ...args: any[]
+        ) =>
+            expressionContext
+                ? findBitmap(expressionContext?.projectStore.project, args[0])
+                : undefined,
+        getValueType: (...args: ValueType[]) => {
+            return "string";
+        },
+        enabled: projectStore => projectStore.projectTypeTraits.isDashboard
     },
 
     "Crypto.sha256": {
@@ -1065,6 +1101,45 @@ export const builtInFunctions: {
         }
     },
 
+    "String.format": {
+        operationIndex: 79,
+        arity: 2,
+        args: ["specifier", "number"],
+        eval: (
+            expressionContext: IExpressionContext | undefined,
+            ...args: any[]
+        ) => {
+            if (
+                !expressionContext?.projectStore.projectTypeTraits.isDashboard
+            ) {
+                if (args[0].startsWith("%")) {
+                    return (window as any).d3.format(args[0].slice(1))(args[1]);
+                } else {
+                    return (window as any).d3.format(args[0])(args[1]);
+                }
+            } else {
+                (window as any).d3.format(args[0])(args[1]);
+            }
+        },
+        getValueType: (...args: ValueType[]) => {
+            return "string";
+        }
+    },
+
+    "String.formatPrefix": {
+        operationIndex: 80,
+        arity: 3,
+        args: ["specifier", "value", "number"],
+        eval: (
+            expressionContext: IExpressionContext | undefined,
+            ...args: any[]
+        ) => (window as any).d3.formatPrefix(args[0], args[1])(args[2]),
+        getValueType: (...args: ValueType[]) => {
+            return "string";
+        },
+        enabled: projectStore => projectStore.projectTypeTraits.isDashboard
+    },
+
     "String.padStart": {
         operationIndex: 50,
         arity: 3,
@@ -1221,6 +1296,20 @@ export const builtInFunctions: {
         }
     },
 
+    "Blob.toString": {
+        operationIndex: 88,
+        arity: 1,
+        args: ["blob"],
+        eval: (
+            expressionContext: IExpressionContext | undefined,
+            ...args: any[]
+        ) => args[1].toString("utf8"),
+        getValueType: (...args: ValueType[]) => {
+            return "string";
+        },
+        enabled: projectStore => projectStore.projectTypeTraits.isDashboard
+    },
+
     "JSON.get": {
         operationIndex: 76,
         arity: 2,
@@ -1247,6 +1336,104 @@ export const builtInFunctions: {
             return "json";
         },
         enabled: projectStore => projectStore.projectTypeTraits.isDashboard
+    },
+
+    "Event.getCode": {
+        operationIndex: 81,
+        arity: 1,
+        args: ["event"],
+        eval: (
+            expressionContext: IExpressionContext | undefined,
+            ...args: any[]
+        ) => undefined,
+        getValueType: (...args: ValueType[]) => {
+            return "integer";
+        },
+        enabled: projectStore => projectStore.projectTypeTraits.isLVGL
+    },
+
+    "Event.getCurrentTarget": {
+        operationIndex: 82,
+        arity: 1,
+        args: ["event"],
+        eval: (
+            expressionContext: IExpressionContext | undefined,
+            ...args: any[]
+        ) => undefined,
+        getValueType: (...args: ValueType[]) => {
+            return "widget";
+        },
+        enabled: projectStore => projectStore.projectTypeTraits.isLVGL
+    },
+
+    "Event.getTarget": {
+        operationIndex: 83,
+        arity: 1,
+        args: ["event"],
+        eval: (
+            expressionContext: IExpressionContext | undefined,
+            ...args: any[]
+        ) => undefined,
+        getValueType: (...args: ValueType[]) => {
+            return "widget";
+        },
+        enabled: projectStore => projectStore.projectTypeTraits.isLVGL
+    },
+
+    "Event.getUserData": {
+        operationIndex: 84,
+        arity: 1,
+        args: ["event"],
+        eval: (
+            expressionContext: IExpressionContext | undefined,
+            ...args: any[]
+        ) => undefined,
+        getValueType: (...args: ValueType[]) => {
+            return "any";
+        },
+        enabled: projectStore => projectStore.projectTypeTraits.isLVGL
+    },
+
+    "Event.getKey": {
+        operationIndex: 85,
+        arity: 1,
+        args: ["event"],
+        eval: (
+            expressionContext: IExpressionContext | undefined,
+            ...args: any[]
+        ) => undefined,
+        getValueType: (...args: ValueType[]) => {
+            return "integer";
+        },
+        enabled: projectStore => projectStore.projectTypeTraits.isLVGL
+    },
+
+    "Event.getGestureDir": {
+        operationIndex: 86,
+        arity: 1,
+        args: ["event"],
+        eval: (
+            expressionContext: IExpressionContext | undefined,
+            ...args: any[]
+        ) => undefined,
+        getValueType: (...args: ValueType[]) => {
+            return "integer";
+        },
+        enabled: projectStore => projectStore.projectTypeTraits.isLVGL
+    },
+
+    "Event.getRotaryDiff": {
+        operationIndex: 87,
+        arity: 1,
+        args: ["event"],
+        eval: (
+            expressionContext: IExpressionContext | undefined,
+            ...args: any[]
+        ) => undefined,
+        getValueType: (...args: ValueType[]) => {
+            return "integer";
+        },
+        enabled: projectStore => projectStore.projectTypeTraits.isLVGL
     },
 
     "LVGL.MeterTickIndex": {
@@ -1374,7 +1561,7 @@ const lvglConstants: BuiltInConstantsType = {
     "LVGL.LV_SYMBOL_BELL": LVGL_SYMBOL("\uF0F3"),
     "LVGL.LV_SYMBOL_KEYBOARD": LVGL_SYMBOL("\uF11C"),
     "LVGL.LV_SYMBOL_GPS": LVGL_SYMBOL("\uF124"),
-    "LVGL.LV_SYMBOL_FILE": LVGL_SYMBOL("\uF158"),
+    "LVGL.LV_SYMBOL_FILE": LVGL_SYMBOL("\uF15B"),
     "LVGL.LV_SYMBOL_WIFI": LVGL_SYMBOL("\uF1EB"),
     "LVGL.LV_SYMBOL_BATTERY_FULL": LVGL_SYMBOL("\uF240"),
     "LVGL.LV_SYMBOL_BATTERY_3": LVGL_SYMBOL("\uF241"),

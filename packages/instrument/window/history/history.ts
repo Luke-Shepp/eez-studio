@@ -9,7 +9,7 @@ import {
 } from "mobx";
 
 import { formatTransferSpeed, formatDate } from "eez-studio-shared/util";
-import { db } from "eez-studio-shared/db-path";
+import { db } from "eez-studio-shared/db";
 import { dbQuery } from "eez-studio-shared/db-query";
 import {
     IStore,
@@ -33,7 +33,10 @@ import {
 
 import { Filters, FilterStats } from "instrument/window/history/filters";
 
-import { HistorySessions } from "instrument/window/history/session/store";
+import {
+    historySessions,
+    SESSION_FREE_ID
+} from "instrument/window/history/session/store";
 
 import { IHistoryItem } from "instrument/window/history/item";
 import {
@@ -450,7 +453,7 @@ class HistorySearch {
     }
 
     update() {
-        this.search("");
+        this.search(this.searchText ?? "");
     }
 
     search(searchText: string) {
@@ -696,7 +699,7 @@ class HistoryNavigator {
                             this.history.oidWhereClause
                         } AND date < ? ${this.history.getFilter()}`
                 )
-                .get(this.firstHistoryItemTime);
+                .get(this.firstHistoryItemTime) as any;
 
             this.hasOlder = result && Number(result.count) > 0;
         } else {
@@ -728,7 +731,7 @@ class HistoryNavigator {
                             this.history.oidWhereClause
                         } AND date > ? ${this.history.getFilter()}`
                 )
-                .get(this.lastHistoryItemTime);
+                .get(this.lastHistoryItemTime) as any;
 
             this.hasNewer = result && Number(result.count) > 0;
         } else {
@@ -864,17 +867,7 @@ class HistorySelection {
     }
 
     get canDelete() {
-        if (this.items.length === 0) {
-            return false;
-        }
-
-        for (let i = 0; i < this.items.length; ++i) {
-            if (this.items[i].type.startsWith("activity-log/session")) {
-                return false;
-            }
-        }
-
-        return true;
+        return this.items.length > 0;
     }
 
     get items() {
@@ -910,7 +903,6 @@ export class History {
     calendar = new HistoryCalendar(this);
     search = new HistorySearch(this);
     navigator = new HistoryNavigator(this);
-    sessions: HistorySessions;
     selection = new HistorySelection(this);
 
     filterStats: FilterStats = new FilterStats(this);
@@ -957,10 +949,6 @@ export class History {
             },
             this.optionsArg
         );
-
-        if (this.isSessionsSupported) {
-            this.sessions = new HistorySessions(this);
-        }
 
         scheduleTask(
             "Watch activity log",
@@ -1045,17 +1033,14 @@ export class History {
             this.load();
         }
 
-        if (this.isSessionsSupported) {
-            scheduleTask(
-                "Load sessions",
-                Priority.Low,
-                action(() => this.sessions.load())
-            );
-        }
-
         this.reactionDisposer = reaction(
-            () => this.getFilter(),
-            filter => {
+            () => ({
+                filter: this.getFilter(),
+                selectedSession: this.isSessionsSupported
+                    ? historySessions.selectedSession
+                    : undefined
+            }),
+            () => {
                 if (this.reactionTimeout) {
                     clearTimeout(this.reactionTimeout);
                 }
@@ -1063,6 +1048,7 @@ export class History {
                     this.reactionTimeout = undefined;
                     this.calendar.load();
                     this.calendar.update();
+                    //this.filterStats.update();
                     this.search.update();
                 }, 10);
             }
@@ -1118,52 +1104,21 @@ export class History {
         }
     }
 
-    get sessionStartCond() {
-        if (this.appStore.oids && this.appStore.oids.length === 0) {
-            return "1";
-        }
-
-        return `(
-            type='activity-log/session-start' AND
-            (
-                json_extract(message, '$.sessionCloseId') IS NULL OR
-                EXISTS(
-                    SELECT * FROM ${this.table} AS T2
-                    WHERE
-                        T2.${this.oidCond} AND
-                        T2.sid = T1.id
-                )
-            )
-        )`;
-    }
-
-    get sessionCloseCond() {
-        if (this.appStore.oids && this.appStore.oids.length === 0) {
-            return "1";
-        }
-
-        return `(
-            type='activity-log/session-close' AND
-            EXISTS(
-                SELECT * FROM ${this.table} AS T2
-                WHERE
-                    T2.${this.oidCond} AND
-                    T2.sid = T1.sid
-            )
-        )`;
+    get sessionCond() {
+        return this.isSessionsSupported &&
+            historySessions.selectedSession.id != SESSION_FREE_ID
+            ? `(sid = ${historySessions.selectedSession.id})`
+            : "1";
     }
 
     get oidWhereClause() {
-        return `(${this.sessionStartCond} OR ${this.sessionCloseCond} OR ${this.oidCond})`;
+        return `(${this.sessionCond} AND ${this.oidCond})`;
     }
 
     onTerminate() {
         this.reactionDisposer();
         if (this.reactionTimeout) {
             clearTimeout(this.reactionTimeout);
-        }
-        if (this.sessions) {
-            this.sessions.onTerminate();
         }
         this.items.forEach(item => item.dispose());
         if (this.optionsStoreWatchId) {
@@ -1205,7 +1160,7 @@ export class History {
     }
 
     getFilter() {
-        let filter = "AND NOT deleted AND " + this.appStore.filters.getFilter();
+        let filter = "AND NOT deleted AND " + this.appStore.filters.sqlFilter;
 
         if (
             this.appStore.selectHistoryItemsSpecification &&
@@ -1353,63 +1308,19 @@ export class History {
         op: StoreOperation,
         options: IStoreOperationOptions
     ) {
-        if (activityLogEntry.type === "activity-log/session-close") {
-            if (this.isInstrumentHistory) {
-                const result = db
-                    .prepare(
-                        `SELECT
-                            count(*) AS count
-                        FROM
-                            ${this.table}
-                        WHERE
-                            oid = ${this.oid} AND sid=${activityLogEntry.sid}`
-                    )
-                    .get();
-
-                // if instrument IS NOT used in this session ...
-                if (!(result && Number(result.count) > 0)) {
-                    // ... no need to show session close item and also remove session start item.
-                    const sessionStart: Partial<IActivityLogEntry> = {
-                        id: activityLogEntry.sid as string,
-                        oid: "0",
-                        type: "activity-log/session-start"
-                    };
-                    if (this.sessions) {
-                        this.sessions.onActivityLogEntryRemoved(
-                            sessionStart as IActivityLogEntry
-                        );
-                    }
-                    this.removeActivityLogEntry(
-                        sessionStart as IActivityLogEntry
-                    );
-                    return;
-                }
-            }
-        }
-
         const foundItem = this.findHistoryItemById(activityLogEntry.id);
         if (foundItem) {
             return;
-        }
-
-        if (this.sessions) {
-            this.sessions.onActivityLogEntryCreated(activityLogEntry);
         }
 
         if (op === "restore") {
             // this item was restored from undo buffer,
             this.addActivityLogEntry(activityLogEntry);
         } else {
-            // This is a new history item,
-            // add it to the bottom of history list...
-            if (this.navigator.hasNewer) {
-                await this.calendar.showRecent();
-            } else {
-                this.addActivityLogEntry(activityLogEntry);
-            }
-            // ... and scroll to the bottom of history list.
-            moveToBottomOfHistory(
-                this.appStore.navigationStore.mainHistoryView
+            const historyItem = this.addActivityLogEntry(activityLogEntry);
+            showHistoryItem(
+                this.appStore.navigationStore.mainHistoryView,
+                historyItem
             );
         }
     }
@@ -1419,10 +1330,6 @@ export class History {
         op: StoreOperation,
         options: IStoreOperationOptions
     ) {
-        if (this.sessions) {
-            this.sessions.onActivityLogEntryUpdated(activityLogEntry);
-        }
-
         getScrapbookStore().onUpdateActivityLogEntry(activityLogEntry);
 
         const foundItem = this.findHistoryItemById(activityLogEntry.id);
@@ -1460,10 +1367,6 @@ export class History {
         op: StoreOperation,
         options: IStoreOperationOptions
     ) {
-        if (this.sessions) {
-            this.sessions.onActivityLogEntryRemoved(activityLogEntry);
-        }
-
         getScrapbookStore().onActivityLogEntryRemoved(activityLogEntry);
 
         this.removeActivityLogEntry(activityLogEntry);
@@ -1707,7 +1610,7 @@ export class DeletedItemsHistory extends History {
                 WHERE
                     ${this.oidWhereClause} AND deleted`
             )
-            .get();
+            .get() as any;
 
         runInAction(() => {
             this.deletedCount = result ? Number(result.count) : 0;

@@ -1,9 +1,10 @@
 import fs from "fs";
-import { clipboard, nativeImage } from "@electron/remote";
+import { clipboard, getCurrentWindow, nativeImage } from "@electron/remote";
 import React from "react";
 import { observer } from "mobx-react";
 import { makeObservable, observable, runInAction } from "mobx";
 import { dialog } from "@electron/remote";
+import { pathToFileURL } from "url";
 
 import * as notification from "eez-studio-ui/notification";
 
@@ -52,7 +53,7 @@ export const ImageProperty = observer(
             const embeddedImage = imageValue.startsWith("data:image");
 
             return (
-                <div>
+                <div style={{ width: "100%" }}>
                     <div className="input-group">
                         <input
                             type="text"
@@ -100,29 +101,32 @@ export const ImageProperty = observer(
                                 className="btn btn-secondary"
                                 type="button"
                                 onClick={async () => {
-                                    const result = await dialog.showOpenDialog({
-                                        properties: ["openFile"],
-                                        filters: [
-                                            {
-                                                name: "Image files",
-                                                extensions: [
-                                                    "png",
-                                                    "jpg",
-                                                    "jpeg"
-                                                ]
-                                            },
-                                            {
-                                                name: "All Files",
-                                                extensions: ["*"]
-                                            }
-                                        ],
-                                        defaultPath:
-                                            propertyInfo.defaultImagesPath
-                                                ? propertyInfo.defaultImagesPath(
-                                                      this.context
-                                                  )
-                                                : undefined
-                                    });
+                                    const result = await dialog.showOpenDialog(
+                                        getCurrentWindow(),
+                                        {
+                                            properties: ["openFile"],
+                                            filters: [
+                                                {
+                                                    name: "Image files",
+                                                    extensions: [
+                                                        "png",
+                                                        "jpg",
+                                                        "jpeg"
+                                                    ]
+                                                },
+                                                {
+                                                    name: "All Files",
+                                                    extensions: ["*"]
+                                                }
+                                            ],
+                                            defaultPath:
+                                                propertyInfo.defaultImagesPath
+                                                    ? propertyInfo.defaultImagesPath(
+                                                          this.context
+                                                      )
+                                                    : undefined
+                                        }
+                                    );
                                     const filePaths = result.filePaths;
                                     if (filePaths && filePaths[0]) {
                                         if (
@@ -176,9 +180,11 @@ export const ImageProperty = observer(
                                     imageValue &&
                                     imageValue.startsWith("data:image/")
                                         ? imageValue
-                                        : this.context.getAbsoluteFilePath(
-                                              imageValue || ""
-                                          )
+                                        : pathToFileURL(
+                                              this.context.getAbsoluteFilePath(
+                                                  imageValue || ""
+                                              )
+                                          ).href
                                 }
                                 style={{
                                     display: "block",

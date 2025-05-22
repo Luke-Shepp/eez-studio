@@ -19,7 +19,8 @@ import {
     Project,
     checkObjectReference,
     checkAssetId,
-    ImportDirective
+    ImportDirective,
+    BuildFile
 } from "project-editor/project/project";
 
 import {
@@ -29,7 +30,8 @@ import {
     CustomInput,
     CustomOutput,
     createActionComponentClass,
-    makeExpressionProperty
+    makeExpressionProperty,
+    checkProperty
 } from "project-editor/flow/component";
 
 import { Page } from "project-editor/features/page/page";
@@ -44,7 +46,8 @@ import { getObjectVariableTypeFromType } from "project-editor/features/variable/
 // ACTIONS
 import {
     OutputActionComponent,
-    CallActionActionComponent
+    CallActionActionComponent,
+    CommentActionComponent
 } from "project-editor/flow/components/actions";
 import "project-editor/flow/components/actions/execute-command";
 import "project-editor/flow/components/actions/stream";
@@ -58,6 +61,7 @@ import "project-editor/flow/components/actions/python";
 import "project-editor/flow/components/actions/mqtt-actions";
 import "project-editor/flow/components/actions/csv";
 import "project-editor/flow/components/actions/modbus";
+import "project-editor/flow/components/actions/tabulator";
 import "project-editor/flow/components/actions/tcp";
 import "project-editor/lvgl/actions";
 
@@ -72,11 +76,23 @@ import "project-editor/flow/components/widgets/dashboard";
 import "project-editor/flow/components/widgets/eez-gui";
 import {
     LVGLWidget,
+    LVGLScreenWidget,
+    LVGLContainerWidget,
     LVGLPanelWidget,
-    LVGLUserWidgetWidget
+    LVGLUserWidgetWidget,
+    LVGLTabWidget,
+    LVGLRollerWidget,
+    LVGLButtonMatrixWidget,
+    LVGLLedWidget,
+    LVGLTabviewWidget,
+    LVGLDropdownWidget
 } from "project-editor/lvgl/widgets";
 
-import { getBitmapData } from "project-editor/features/bitmap/bitmap";
+// ACTIONS: udp
+import "project-editor/flow/components/actions/udp";
+
+import { Bitmap, getBitmapData } from "project-editor/features/bitmap/bitmap";
+import { Font } from "project-editor/features/font/font";
 import {
     migrateProjectVersion,
     migrateProjectType
@@ -106,19 +122,18 @@ import {
     EnumMember
 } from "project-editor/features/variable/variable";
 
-import { ConditionalStyle, Style } from "project-editor/features/style/style";
+import { Style } from "project-editor/features/style/style";
 
-import { PropertyType } from "project-editor/core/object";
 import { evalProperty } from "project-editor/flow/helper";
 import { migrateLvglVersion } from "./lvgl/migrate";
+import { FlowTabState } from "project-editor/flow/flow-tab-state";
+import { Color } from "project-editor/features/style/theme";
+import { UserProperty } from "./flow/user-property";
+import { LVGLActionComponent } from "project-editor/lvgl/actions";
+import { FlowEditor } from "project-editor/flow/editor/editor";
+import { newComponentMenuItem } from "project-editor/flow/editor/ComponentsPalette";
 
-export const conditionalStyleConditionProperty = makeExpressionProperty(
-    {
-        name: "condition",
-        type: PropertyType.MultilineText
-    },
-    "boolean"
-);
+import { LVGLPageEditorRuntime } from "project-editor/lvgl/page-runtime";
 
 export async function createProjectEditor(
     homeTabs: Tabs | undefined,
@@ -161,6 +176,7 @@ export async function createProjectEditor(
         ActionClass: Action,
         ComponentClass: Component,
         ActionComponentClass: ActionComponent,
+        CommentActionComponentClass: CommentActionComponent,
         WidgetClass: Widget,
         ConnectionLineClass: ConnectionLine,
         UserWidgetWidgetClass: UserWidgetWidget,
@@ -170,14 +186,28 @@ export async function createProjectEditor(
         OutputActionComponentClass: OutputActionComponent,
         CallActionActionComponentClass: CallActionActionComponent,
         VariableClass: Variable,
+        UserPropertyClass: UserProperty,
         GlyphClass: Glyph,
         ScpiCommandClass: ScpiCommand,
         ScpiSubsystemClass: ScpiSubsystem,
         StyleClass: Style,
+        BitmapClass: Bitmap,
+        FontClass: Font,
+        ColorClass: Color,
         LVGLWidgetClass: LVGLWidget,
+        LVGLScreenWidgetClass: LVGLScreenWidget,
+        LVGLContainerWidgetClass: LVGLContainerWidget,
         LVGLPanelWidgetClass: LVGLPanelWidget,
         LVGLUserWidgetWidgetClass: LVGLUserWidgetWidget,
+        LVGLTabviewWidgetClass: LVGLTabviewWidget,
+        LVGLTabWidgetClass: LVGLTabWidget,
+        LVGLDropdownWidgetClass: LVGLDropdownWidget,
+        LVGLRollerWidgetClass: LVGLRollerWidget,
+        LVGLButtonMatrixWidgetClass: LVGLButtonMatrixWidget,
+        LVGLLedWidgetClass: LVGLLedWidget,
         LVGLStyleClass: LVGLStyle,
+        LVGLActionComponentClass: LVGLActionComponent,
+        LVGLPageEditorRuntimeClass: LVGLPageEditorRuntime,
         getProject,
         getProjectStore,
         getFlow,
@@ -209,12 +239,12 @@ export async function createProjectEditor(
         createActionComponentClass,
         makeExpressionProperty,
         evalProperty,
-        conditionalStyleConditionProperty
+        checkProperty,
+        FlowTabStateClass: FlowTabState,
+        BuildFileClass: BuildFile,
+        FlowEditorClass: FlowEditor,
+        newComponentMenuItem
     };
-
-    ConditionalStyle.classInfo.properties.push(
-        conditionalStyleConditionProperty
-    );
 
     return projectEditor;
 }

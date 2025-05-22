@@ -91,11 +91,15 @@ export const FlowViewer = observer(
         }
 
         componentDidMount() {
-            this.context.navigationStore.setInitialSelectedPanel(this);
+            this.context.navigationStore.mountPanel(this);
         }
 
         componentDidCatch(error: any, info: any) {
             console.error(error, info);
+        }
+
+        componentWillUnmount() {
+            this.context.navigationStore.unmountPanel(this);
         }
 
         // interface IPanel implementation
@@ -106,19 +110,9 @@ export const FlowViewer = observer(
         get selectedObjects() {
             return [];
         }
-        cutSelection() {}
-        copySelection() {}
-        pasteSelection() {}
-        deleteSelection() {}
         onFocus = () => {
             this.context.navigationStore.setSelectedPanel(this);
         };
-
-        componentWillUnmount() {
-            if (this.context.navigationStore.selectedPanel === this) {
-                this.context.navigationStore.setSelectedPanel(undefined);
-            }
-        }
 
         getDragComponent(event: React.DragEvent) {
             return undefined;
@@ -433,7 +427,7 @@ export const Canvas = observer(
             this.buttonsAtDown = event.buttons;
 
             if (this.mouseHandler) {
-                this.mouseHandler.up(this.props.flowContext);
+                this.mouseHandler.up(this.props.flowContext, true);
                 this.mouseHandler = undefined;
             }
 
@@ -448,7 +442,8 @@ export const Canvas = observer(
                     movementX: event.movementX ?? 0,
                     movementY: event.movementY ?? 0,
                     ctrlKey: event.ctrlKey,
-                    shiftKey: event.shiftKey
+                    shiftKey: event.shiftKey,
+                    timeStamp: event.timeStamp
                 };
 
                 this.mouseHandler.down(this.props.flowContext, event);
@@ -471,16 +466,17 @@ export const Canvas = observer(
                         ? this.mouseHandler.lastPointerEvent.movementY
                         : 0,
                     ctrlKey: event.ctrlKey,
-                    shiftKey: event.shiftKey
+                    shiftKey: event.shiftKey,
+                    timeStamp: event.timeStamp
                 };
 
                 this.mouseHandler.move(this.props.flowContext, event);
             }
         };
 
-        onDragEnd(event: PointerEvent) {
+        onDragEnd(event: PointerEvent, cancel: boolean) {
             if (this.mouseHandler) {
-                this.mouseHandler.up(this.props.flowContext);
+                this.mouseHandler.up(this.props.flowContext, cancel);
 
                 this.mouseHandler = undefined;
             }
@@ -778,6 +774,17 @@ class FlowDocument implements IDocument {
         connectionOutput: string,
         targetObjectId: string,
         connectionInput: string
+    ) {}
+
+    connectToNewTarget(
+        sourceObjectId: string,
+        connectionOutput: string,
+        atPoint: Point
+    ) {}
+    connectToNewSource(
+        targetObjectId: string,
+        connectionInput: string,
+        atPoint: Point
     ) {}
 }
 

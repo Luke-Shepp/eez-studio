@@ -25,6 +25,7 @@ const lineColor = () => theme().connectionLineColor;
 const seqLineColor = () => theme().seqConnectionLineColor;
 const selectedLineColor = () => theme().selectedConnectionLineColor;
 const selectedLineColorInViewer = () => theme().selectionBackgroundColor;
+const disabledLineColor = () => theme().disabledLineColor;
 
 export const strokeWidth = 1.2;
 const seqStrokeWidth = 1.2;
@@ -45,14 +46,23 @@ export const ConnectionLines = observer(
     }) => {
         return (
             <>
-                {connectionLines.map(connectionLineAdapter => (
-                    <ConnectionLineShape
-                        key={connectionLineAdapter.id}
-                        connectionLineAdapter={connectionLineAdapter}
-                        context={context}
-                        selected={selected}
-                    />
-                ))}
+                {connectionLines
+                    .filter(
+                        connectionLineAdapter =>
+                            context.flowState ||
+                            context.projectStore.project.settings.general
+                                .hiddenWidgetLines != "hidden" ||
+                            (connectionLineAdapter.object as ConnectionLine)
+                                .isVisible
+                    )
+                    .map(connectionLineAdapter => (
+                        <ConnectionLineShape
+                            key={connectionLineAdapter.id}
+                            connectionLineAdapter={connectionLineAdapter}
+                            context={context}
+                            selected={selected}
+                        />
+                    ))}
             </>
         );
     }
@@ -118,7 +128,16 @@ export const ConnectionLineShape = observer(
                 style={{
                     filter: shadow
                         ? `drop-shadow(0px 0px 3px ${shadow.color})`
-                        : undefined
+                        : undefined,
+                    opacity:
+                        context.flowState ||
+                        context.projectStore.project.settings.general
+                            .hiddenWidgetLines == "visible" ||
+                        (connectionLineAdapter.object as ConnectionLine)
+                            .isVisible
+                            ? 1
+                            : context.projectStore.project.settings.general
+                                  .dimmedLinesOpacity / 100
                 }}
             >
                 <path
@@ -203,61 +222,68 @@ const ConnectionLineDebugValue = observer(
     }
 );
 
-class VisiblePath extends React.Component<{
-    lineShape: string;
-    selected: boolean;
-    connectionLine: ConnectionLine;
-    context: IFlowContext;
-    targetInput: ComponentInput | undefined;
-    shadow: { color: string } | undefined;
-}> {
-    ref = React.createRef<SVGPathElement>();
+const VisiblePath = observer(
+    class VisiblePath extends React.Component<{
+        lineShape: string;
+        selected: boolean;
+        connectionLine: ConnectionLine;
+        context: IFlowContext;
+        targetInput: ComponentInput | undefined;
+        shadow: { color: string } | undefined;
+    }> {
+        ref = React.createRef<SVGPathElement>();
 
-    componentDidMount() {
-        if (this.ref.current) {
-            registerPath(this.props.connectionLine, this.ref.current);
+        componentDidMount() {
+            if (this.ref.current) {
+                registerPath(this.props.connectionLine, this.ref.current);
+            }
         }
-    }
 
-    componentWillUnmount() {
-        if (this.ref.current) {
-            unregisterPath(this.props.connectionLine, this.ref.current);
+        componentWillUnmount() {
+            if (this.ref.current) {
+                unregisterPath(this.props.connectionLine, this.ref.current);
+            }
         }
-    }
 
-    render() {
-        const { lineShape, selected, connectionLine, targetInput } = this.props;
+        render() {
+            const { lineShape, selected, connectionLine, targetInput } =
+                this.props;
 
-        const seq =
-            targetInput?.isSequenceInput &&
-            !(
-                connectionLine.targetComponent instanceof
-                ProjectEditor.OutputActionComponentClass
+            const seq =
+                targetInput?.isSequenceInput &&
+                !(
+                    connectionLine.targetComponent instanceof
+                    ProjectEditor.OutputActionComponentClass
+                );
+
+            return (
+                <path
+                    ref={this.ref}
+                    d={lineShape}
+                    style={{
+                        fill: "none",
+                        strokeWidth: this.props.shadow
+                            ? 2
+                            : seq
+                            ? seqStrokeWidth
+                            : strokeWidth,
+                        strokeLinecap: "round",
+                        strokeDasharray: connectionLine.disabled
+                            ? "5.5"
+                            : undefined,
+                        stroke: this.props.shadow?.color
+                    }}
+                    className={classNames("connection-line-path", {
+                        selected,
+                        disabled: connectionLine.disabled,
+                        seq
+                    })}
+                    vectorEffect={selected ? "non-scaling-stroke" : "none"}
+                ></path>
             );
-
-        return (
-            <path
-                ref={this.ref}
-                d={lineShape}
-                style={{
-                    fill: "none",
-                    strokeWidth: this.props.shadow
-                        ? 2
-                        : seq
-                        ? seqStrokeWidth
-                        : strokeWidth,
-                    strokeLinecap: "round",
-                    stroke: this.props.shadow?.color
-                }}
-                className={classNames("connection-line-path", {
-                    selected,
-                    seq
-                })}
-                vectorEffect={selected ? "non-scaling-stroke" : "none"}
-            ></path>
-        );
+        }
     }
-}
+);
 
 const DebugValue = observer(
     ({
@@ -333,6 +359,7 @@ export const LineMarkers = () => (
                 id="selectedLineEndInViewer"
                 color={selectedLineColorInViewer()}
             />
+            <LineEndMarker id="disabledLineEnd" color={disabledLineColor()} />
             <AnimationCurveEndMarker />
             <pattern
                 id="page-background"

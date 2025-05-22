@@ -135,6 +135,12 @@ export function formatDuration(duration: number) {
     });
 }
 
+export function formatDurationWithParam(duration: number, format: string) {
+    return getMoment().duration(duration, "milliseconds").format({
+        template: format,
+        trim: false
+    });
+}
 export function getFirstDayOfWeek() {
     return localeData.firstDayOfWeek();
 }

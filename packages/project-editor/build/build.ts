@@ -34,6 +34,7 @@ import {
 
 import { buildAssets } from "project-editor/build/assets";
 import { buildScpi } from "project-editor/build/scpi";
+import { generateSourceCodeForEezFramework } from "project-editor/lvgl/build";
 
 ////////////////////////////////////////////////////////////////////////////////
 
@@ -131,7 +132,7 @@ async function generateFile(
 ): Promise<any> {
     let parts: any;
 
-    if (template) {
+    if (template != undefined) {
         let buildFileContent = template.replace(
             sectionNamesRegexp,
             (_1, part, configurationName) => {
@@ -169,7 +170,7 @@ async function generateFile(
             projectStore.outputSectionsStore.write(
                 Section.OUTPUT,
                 MessageType.INFO,
-                `File "${filePath}.map" builded`
+                `File "${filePath}.map" built`
             );
         }
     }
@@ -177,7 +178,7 @@ async function generateFile(
     projectStore.outputSectionsStore.write(
         Section.OUTPUT,
         MessageType.INFO,
-        `File "${filePath}" builded`
+        `File "${filePath}" built`
     );
 
     return parts;
@@ -423,6 +424,16 @@ export async function build(
                 destinationFolderPath || "",
                 configurationBuildResults
             );
+
+            if (project.projectTypeTraits.isLVGL) {
+                await generateSourceCodeForEezFramework(
+                    project,
+                    destinationFolderPath || "",
+                    configurationBuildResults["Default"]?.[0]?.[
+                        "EEZ_FLOW_IS_USING_CRYPTO_SHA256"
+                    ] as any as boolean
+                );
+            }
         } else {
             const baseName = path.basename(
                 projectStore.filePath || "",
@@ -650,7 +661,7 @@ var checkTransformer: (object: IEezObject) => IMessage[] = createTransformer(
             new Message(
                 MessageType.GROUP,
                 getLabel(object),
-                undefined,
+                object,
                 messages as Message[]
             )
         ];

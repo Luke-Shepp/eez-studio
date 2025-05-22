@@ -5,10 +5,12 @@ import classNames from "classnames";
 import { intersection } from "lodash";
 
 import {
-    getClassInfoLvglProperties,
+    getClassInfoLvglParts,
     IEezObject,
     PropertyInfo,
-    PropertyProps
+    PropertyProps,
+    LVGLParts,
+    getObjectPropertyDisplayName
 } from "project-editor/core/object";
 import type { Page } from "project-editor/features/page/page";
 import { ProjectEditor } from "project-editor/project-editor-interface";
@@ -22,10 +24,7 @@ import {
     LVGLPropertyInfo,
     PropertyValueHolder
 } from "project-editor/lvgl/style-catalog";
-import {
-    LVGLParts,
-    getStylePropDefaultValue
-} from "project-editor/lvgl/style-helper";
+import { getStylePropDefaultValue } from "project-editor/lvgl/style-helper";
 import { ProjectContext } from "project-editor/project/context";
 import { Icon } from "eez-studio-ui/icon";
 import {
@@ -34,6 +33,7 @@ import {
 } from "project-editor/lvgl/page-runtime";
 import { ITreeNode, Tree } from "eez-studio-ui/tree";
 import { Checkbox } from "project-editor/ui-components/PropertyGrid/Checkbox";
+import { LVGL_STYLE_STATES } from "project-editor/lvgl/lvgl-constants";
 
 type TreeNodeData =
     | {
@@ -41,15 +41,6 @@ type TreeNodeData =
           state: string;
       }
     | undefined;
-
-const LVGL_STYLE_STATES = [
-    "DEFAULT",
-    "CHECKED",
-    "PRESSED",
-    "CHECKED|PRESSED",
-    "DISABLED",
-    "FOCUSED"
-];
 
 export const LVGLStylesDefinitionProperty = observer(
     class LVGLStylesDefinitionProperty extends React.Component<PropertyProps> {
@@ -71,12 +62,8 @@ export const LVGLStylesDefinitionProperty = observer(
 
             if (part) {
                 this.props.objects.forEach(object => {
-                    const lvglClassInfoProperties =
-                        getClassInfoLvglProperties(object);
-                    if (
-                        part &&
-                        lvglClassInfoProperties.parts.indexOf(part) == -1
-                    ) {
+                    const parts = getClassInfoLvglParts(object);
+                    if (part && parts.indexOf(part) == -1) {
                         part = undefined;
                     }
                 });
@@ -254,12 +241,8 @@ export const LVGLStylesDefinitionTree = observer(
 
             if (part) {
                 this.props.objects.forEach(object => {
-                    const lvglClassInfoProperties =
-                        getClassInfoLvglProperties(object);
-                    if (
-                        part &&
-                        lvglClassInfoProperties.parts.indexOf(part) == -1
-                    ) {
+                    const parts = getClassInfoLvglParts(object);
+                    if (part && parts.indexOf(part) == -1) {
                         part = undefined;
                     }
                 });
@@ -307,12 +290,12 @@ export const LVGLStylesDefinitionTree = observer(
             let parts: LVGLParts[] | undefined;
 
             this.props.objects.forEach(widget => {
-                const lvglClassInfoProperties =
-                    getClassInfoLvglProperties(widget);
+                const widgetParts = getClassInfoLvglParts(widget);
+
                 if (parts == undefined) {
-                    parts = lvglClassInfoProperties.parts;
+                    parts = widgetParts;
                 } else {
-                    parts = intersection(parts, lvglClassInfoProperties.parts);
+                    parts = intersection(parts, widgetParts);
                 }
             });
 
@@ -511,9 +494,24 @@ export const LVGLStylesDefinitionGroupProperties = observer(
                                               runtime,
                                               lvglObj,
                                               part,
+                                              state,
                                               propertyInfo
                                           );
                                 }
+                            );
+
+                            const propertyObjects = values.map(
+                                value =>
+                                    new PropertyValueHolder(
+                                        this.context,
+                                        propertyInfo.name,
+                                        value
+                                    )
+                            );
+
+                            const propertyName = getObjectPropertyDisplayName(
+                                propertyObjects[0],
+                                propertyInfo
                             );
 
                             return (
@@ -598,24 +596,15 @@ export const LVGLStylesDefinitionGroupProperties = observer(
                                                 }}
                                                 readOnly={readOnly}
                                             />
-                                            {" " +
-                                                (propertyInfo.displayName ||
-                                                    humanize(
-                                                        propertyInfo.name
-                                                    ))}
+                                            <span title={propertyName}>
+                                                {" " + propertyName}
+                                            </span>
                                         </label>
                                     </div>
                                     <div className="EezStudio_LVGLStylesDefinition_Value">
                                         <ProjectEditor.Property
                                             propertyInfo={propertyInfo}
-                                            objects={values.map(
-                                                value =>
-                                                    new PropertyValueHolder(
-                                                        this.context,
-                                                        propertyInfo.name,
-                                                        value
-                                                    )
-                                            )}
+                                            objects={propertyObjects}
                                             updateObject={(
                                                 propertyValues: Object
                                             ) => {
@@ -644,6 +633,45 @@ export const LVGLStylesDefinitionGroupProperties = observer(
                                                 readOnly ||
                                                 checkboxState !== true
                                             }
+                                            onClick={() => {
+                                                if (!checkboxState) {
+                                                    this.context.undoManager.setCombineCommands(
+                                                        true
+                                                    );
+
+                                                    stylesDefinitions.forEach(
+                                                        (
+                                                            stylesDefinition,
+                                                            i
+                                                        ) => {
+                                                            if (
+                                                                definedValues[
+                                                                    i
+                                                                ] === undefined
+                                                            ) {
+                                                                this.context.updateObject(
+                                                                    stylesDefinition,
+                                                                    {
+                                                                        definition:
+                                                                            stylesDefinition.addPropertyToDefinition(
+                                                                                propertyInfo,
+                                                                                part,
+                                                                                state,
+                                                                                values[
+                                                                                    i
+                                                                                ]
+                                                                            )
+                                                                    }
+                                                                );
+                                                            }
+                                                        }
+                                                    );
+
+                                                    this.context.undoManager.setCombineCommands(
+                                                        false
+                                                    );
+                                                }
+                                            }}
                                         />
                                     </div>
                                 </div>

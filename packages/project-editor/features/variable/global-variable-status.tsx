@@ -16,11 +16,14 @@ import type { IVariable } from "project-editor/flow/flow-interfaces";
 import {
     getObjectVariableTypeFromType,
     IObjectVariableValue,
-    getObjectType
+    getObjectType,
+    isObjectType
 } from "project-editor/features/variable/value-type";
 
 import type { Variable } from "project-editor/features/variable/variable";
 import { Loader } from "eez-studio-ui/loader";
+import { Button } from "eez-studio-ui/button";
+import { CodeEditor } from "eez-studio-ui/code-editor";
 
 ////////////////////////////////////////////////////////////////////////////////
 
@@ -61,45 +64,86 @@ export const RenderVariableStatusPropertyUI = observer(
         render() {
             const variable = this.props.objects[0] as Variable;
 
-            const objectVariableType = getObjectVariableTypeFromType(
-                this.context,
-                variable.type
-            );
-            if (!objectVariableType) {
-                return null;
-            }
+            if (isObjectType(variable.type)) {
+                const objectVariableType = getObjectVariableTypeFromType(
+                    this.context,
+                    variable.type
+                );
+                if (!objectVariableType) {
+                    return null;
+                }
 
-            const objectVariableValue = this.objectVariableValue;
+                const objectVariableValue = this.objectVariableValue;
 
-            return (
-                <RenderVariableStatus
-                    key={variable.fullName}
-                    variable={variable}
-                    value={objectVariableValue}
-                    onClick={async () => {
-                        const constructorParams =
-                            await objectVariableType.editConstructorParams!(
-                                variable,
-                                objectVariableValue?.constructorParams,
-                                false
-                            );
-                        if (constructorParams !== undefined) {
+                return (
+                    <RenderVariableStatus
+                        key={variable.fullName}
+                        variable={variable}
+                        value={objectVariableValue}
+                        onClick={async () => {
+                            const constructorParams =
+                                await objectVariableType.editConstructorParams!(
+                                    variable,
+                                    objectVariableValue?.constructorParams,
+                                    false
+                                );
+                            if (constructorParams !== undefined) {
+                                this.context.runtimeSettings.setVariableValue(
+                                    variable,
+                                    constructorParams
+                                );
+                                this.updateObjectVariableValue();
+                            }
+                        }}
+                        onClear={async () => {
                             this.context.runtimeSettings.setVariableValue(
                                 variable,
-                                constructorParams
+                                undefined
                             );
                             this.updateObjectVariableValue();
-                        }
-                    }}
-                    onClear={async () => {
-                        this.context.runtimeSettings.setVariableValue(
-                            variable,
-                            undefined
-                        );
-                        this.updateObjectVariableValue();
-                    }}
-                />
-            );
+                        }}
+                    />
+                );
+            } else {
+                const value =
+                    this.context.runtimeSettings.getVariableValue(variable);
+                return value != undefined ? (
+                    <div>
+                        <div
+                            style={{
+                                marginTop: 10
+                            }}
+                        >
+                            Stored value:
+                        </div>
+                        <CodeEditor
+                            mode="json"
+                            value={JSON.stringify(value, undefined, 2)}
+                            onChange={() => {}}
+                            minLines={2}
+                            maxLines={20}
+                            readOnly={true}
+                            style={{
+                                marginTop: 5,
+                                marginBottom: 10,
+                                border: "1px solid #aaa"
+                            }}
+                        ></CodeEditor>
+                        <Button
+                            color="secondary"
+                            size="small"
+                            onClick={() => {
+                                this.context.runtimeSettings.setVariableValue(
+                                    variable,
+                                    undefined
+                                );
+                            }}
+                        >
+                            Clear Stored Value
+                        </Button>
+                    </div>
+                ) : null;
+            }
         }
     }
 );

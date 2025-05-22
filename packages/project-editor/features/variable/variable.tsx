@@ -1,3 +1,4 @@
+import { clipboard } from "electron";
 import React from "react";
 import {
     computed,
@@ -9,6 +10,7 @@ import {
 } from "mobx";
 
 import { validators } from "eez-studio-shared/validation";
+import { validators as validatorsRenderer } from "eez-studio-shared/validation-renderer";
 
 import { showGenericDialog } from "eez-studio-ui/generic-dialog";
 
@@ -19,14 +21,20 @@ import {
     EezObject,
     PropertyType,
     MessageType,
-    IMessage
+    IMessage,
+    PropertyInfo,
+    getProperty,
+    PropertyProps,
+    isPropertyDisabled
 } from "project-editor/core/object";
 import {
     getChildOfObject,
     Message,
     propertyNotSetMessage,
     createObject,
-    isEezObjectArray
+    isEezObjectArray,
+    getAncestorOfType,
+    findPropertyByNameInObject
 } from "project-editor/store";
 import {
     isDashboardProject,
@@ -56,7 +64,10 @@ import {
     ValueType,
     getObjectVariableTypeFromType,
     SYSTEM_STRUCTURES,
-    isValidType
+    isValidType,
+    getSystemEnums,
+    isEnumType,
+    getEnumTypeNameFromType
 } from "project-editor/features/variable/value-type";
 import {
     FLOW_ITERATOR_INDEXES_VARIABLE,
@@ -64,16 +75,265 @@ import {
 } from "project-editor/features/variable/defs";
 import { ProjectEditor } from "project-editor/project-editor-interface";
 import { generalGroup } from "project-editor/ui-components/PropertyGrid/groups";
-import { parseIdentifier } from "project-editor/flow/expression/helper";
 import { RenderVariableStatusPropertyUI } from "project-editor/features/variable/global-variable-status";
 import { VARIABLE_ICON } from "project-editor/ui-components/icons";
 import type { ProjectEditorFeature } from "project-editor/store/features";
+import type { UserProperty } from "project-editor/flow/user-property";
+import type { Flow } from "project-editor/flow/flow";
+import { observer } from "mobx-react";
+import { ProjectContext } from "project-editor/project/context";
+import { Build, getName, NamingConvention } from "project-editor/build/helper";
+import { IconAction } from "eez-studio-ui/action";
+import { CodeEditor } from "eez-studio-ui/code-editor";
+import { Icon } from "eez-studio-ui/icon";
 
 ////////////////////////////////////////////////////////////////////////////////
 
 function isGlobalVariable(object: IEezObject) {
     return !ProjectEditor.getFlow(object);
 }
+
+export function uniqueForVariableAndUserProperty(
+    object: Variable | UserProperty,
+    parent: IEezObject,
+    propertyInfo?: PropertyInfo
+) {
+    const flow = getAncestorOfType(
+        parent,
+        ProjectEditor.FlowClass.classInfo
+    ) as Flow;
+    if (!flow) {
+        return validators.unique(object, parent);
+    }
+
+    const oldIdentifier =
+        object && propertyInfo
+            ? getProperty(object, propertyInfo.name)
+            : undefined;
+
+    return (object: any, ruleName: string) => {
+        const newIdentifer = object[ruleName];
+        if (oldIdentifier != undefined && newIdentifer == oldIdentifier) {
+            return null;
+        }
+
+        const userPropertyOrLocalVariable =
+            flow.userPropertiesAndLocalVariables.find(
+                userPropertyOrLocalVariable =>
+                    userPropertyOrLocalVariable != object &&
+                    userPropertyOrLocalVariable.name === newIdentifer
+            );
+
+        if (!userPropertyOrLocalVariable) {
+            return null;
+        }
+
+        if (userPropertyOrLocalVariable instanceof Variable) {
+            return "Local variable with this name already exists";
+        } else {
+            return "User property with this name already exists";
+        }
+    };
+}
+
+////////////////////////////////////////////////////////////////////////////////
+
+export const NativeVariableImplementationInfoPropertyUI = observer(
+    class NativeVariableImplementationInfoPropertyUI extends React.Component<PropertyProps> {
+        static contextType = ProjectContext;
+        declare context: React.ContextType<typeof ProjectContext>;
+
+        codeEditorRef = React.createRef<CodeEditor>();
+
+        componentDidMount() {
+            this.codeEditorRef.current?.resize();
+        }
+
+        componentDidUpdate() {
+            this.codeEditorRef.current?.resize();
+        }
+
+        get projectStore() {
+            return ProjectEditor.getProjectStore(this.variable);
+        }
+
+        get implementationLanguage() {
+            return this.projectStore.uiStateStore.implementationLanguage;
+        }
+
+        set implementationLanguage(value: string) {
+            runInAction(() => {
+                this.projectStore.uiStateStore.implementationLanguage = value;
+            });
+        }
+
+        get hasFlowSupport() {
+            return this.projectStore.projectTypeTraits.hasFlowSupport;
+        }
+
+        get variable() {
+            return this.props.objects[0] as Variable;
+        }
+
+        get code() {
+            const variable = this.variable;
+
+            const variableName = getName(
+                "",
+                variable.name,
+                NamingConvention.UnderscoreLowerCase
+            );
+
+            let nativeType;
+
+            if (variable.type == "integer") {
+                nativeType = "int32_t ";
+            } else if (variable.type == "float") {
+                nativeType = "float ";
+            } else if (variable.type == "double") {
+                nativeType = "double ";
+            } else if (variable.type == "boolean") {
+                nativeType = "bool ";
+            } else if (variable.type == "string") {
+                nativeType = "const char *";
+            } else if (isEnumType(variable.type)) {
+                const enumType = getEnumTypeNameFromType(variable.type);
+                nativeType = `${enumType} `;
+            } else {
+            }
+
+            const build = new Build();
+            build.startBuild();
+
+            if (variable.type == "string") {
+                if (this.implementationLanguage == "C") {
+                    build.line(`#include <string.h>`);
+                } else {
+                    build.line(`#include <string>`);
+                }
+            }
+
+            build.line(`#include "vars.h"`);
+
+            build.line("");
+
+            build.line(
+                `${
+                    variable.type == "string"
+                        ? this.implementationLanguage == "C"
+                            ? "char "
+                            : "std::string "
+                        : nativeType
+                }${variableName}${
+                    variable.type == "string" &&
+                    this.implementationLanguage == "C"
+                        ? "[100] = { 0 }"
+                        : ""
+                };`
+            );
+
+            build.line("");
+
+            build.line(
+                `${
+                    this.implementationLanguage == "C++" ? `extern "C" ` : ""
+                }${nativeType}${"get_var_" + variableName}() {`
+            );
+            build.indent();
+            build.line(
+                `return ${variableName}${
+                    variable.type == "string" &&
+                    this.implementationLanguage == "C++"
+                        ? ".c_str()"
+                        : ""
+                };`
+            );
+            build.unindent();
+            build.line(`}`);
+
+            build.line("");
+
+            build.line(
+                `${
+                    this.implementationLanguage == "C++" ? `extern "C" ` : ""
+                }void ${"set_var_" + variableName}(${nativeType}value) {`
+            );
+            build.indent();
+            if (
+                variable.type == "string" &&
+                this.implementationLanguage == "C"
+            ) {
+                build.line(
+                    `strncpy(${variableName}, value, sizeof(${variableName}) / sizeof(char));`
+                );
+                build.line(
+                    `${variableName}[sizeof(${variableName}) / sizeof(char) - 1] = 0;`
+                );
+            } else {
+                build.line(`${variableName} = value;`);
+            }
+            build.unindent();
+            build.line(`}`);
+
+            return build.result;
+        }
+
+        render() {
+            const code = this.code;
+
+            return (
+                <div className="EezStudio_PropertyGrid_TipBox">
+                    <div className="EezStudio_PropertyGrid_TipBox_Description">
+                        <div className="EezStudio_PropertyGrid_TipBox_Header">
+                            <Icon icon="material:lightbulb_outline" />
+                            <span>TIP</span>
+                        </div>
+                        <div className="EezStudio_PropertyGrid_TipBox_DescriptionText">
+                            {this.hasFlowSupport
+                                ? "For native variable "
+                                : "For variable "}
+                            you must provide implementation of get and set
+                            functions. Below is a basic implementation code for
+                            such functions. You can copy and paste it into some
+                            source file in your project.
+                        </div>
+                        <div className="EezStudio_PropertyGrid_TipBox_Toolbar">
+                            <select
+                                className="form-select"
+                                value={this.implementationLanguage}
+                                onChange={event =>
+                                    (this.implementationLanguage =
+                                        event.target.value)
+                                }
+                            >
+                                <option value="C">C</option>
+                                <option value="C++">C++</option>
+                            </select>
+                            <IconAction
+                                icon="material:content_copy"
+                                iconSize={20}
+                                title="Copy to Clipboard"
+                                onClick={() => {
+                                    clipboard.writeText(code);
+                                }}
+                            />
+                        </div>
+                    </div>
+                    <CodeEditor
+                        ref={this.codeEditorRef}
+                        mode="c_cpp"
+                        value={code}
+                        onChange={() => {}}
+                        readOnly={true}
+                        className="form-control"
+                        minLines={2}
+                        maxLines={50}
+                    />
+                </div>
+            );
+        }
+    }
+);
 
 ////////////////////////////////////////////////////////////////////////////////
 
@@ -132,13 +392,28 @@ export class Variable extends EezObject {
             {
                 name: "name",
                 type: PropertyType.String,
-                unique: true
+                uniqueIdentifier: uniqueForVariableAndUserProperty
             },
             {
                 name: "description",
                 type: PropertyType.MultilineText
             },
             variableTypeProperty,
+            {
+                name: "defaultValue",
+                type: PropertyType.MultilineText,
+                expressionType: "any",
+                expressionIsConstant: true,
+                flowProperty: "input",
+                monospaceFont: true,
+                disabled: object => {
+                    const project = ProjectEditor.getProject(object);
+                    return (
+                        project.projectTypeTraits.isLVGL &&
+                        !project.projectTypeTraits.hasFlowSupport
+                    );
+                }
+            },
             {
                 name: "native",
                 type: PropertyType.Boolean,
@@ -149,21 +424,23 @@ export class Variable extends EezObject {
                         variable
                     ).projectTypeTraits.isVariableTypeSupportedAsNative(
                         variable.type
-                    )
+                    ),
+                checkboxStyleSwitch: true
             },
             {
-                name: "defaultValue",
-                type: PropertyType.MultilineText,
-                expressionType: "any",
-                expressionIsConstant: true,
-                flowProperty: "input",
-                monospaceFont: true,
-                disableSpellcheck: true,
-                disabled: object => {
-                    const project = ProjectEditor.getProject(object);
-                    return (
-                        project.projectTypeTraits.isLVGL &&
-                        !project.projectTypeTraits.hasFlowSupport
+                name: "nativeImplementationInfo",
+                type: PropertyType.Any,
+                computed: true,
+                propertyGridRowComponent:
+                    NativeVariableImplementationInfoPropertyUI,
+                skipSearch: true,
+                hideInPropertyGrid: (variable: Variable) => {
+                    const projectStore = getProjectStore(variable);
+                    return !(
+                        isLVGLProject(variable) &&
+                        isGlobalVariable(variable) &&
+                        (!projectStore.projectTypeTraits.hasFlowSupport ||
+                            variable.native)
                     );
                 }
             },
@@ -172,8 +449,7 @@ export class Variable extends EezObject {
                 type: PropertyType.MultilineText,
                 disabled: object =>
                     isLVGLProject(object) || hasFlowSupport(object),
-                monospaceFont: true,
-                disableSpellcheck: true
+                monospaceFont: true
             },
             {
                 name: "usedIn",
@@ -193,7 +469,9 @@ export class Variable extends EezObject {
                         !getObjectVariableTypeFromType(
                             ProjectEditor.getProjectStore(variable),
                             variable.type
-                        )?.editConstructorParams)
+                        )?.editConstructorParams) ||
+                    variable.type == "object:TCPSocket",
+                checkboxStyleSwitch: true
             },
             {
                 name: "persistedValue",
@@ -204,21 +482,37 @@ export class Variable extends EezObject {
                 hideInPropertyGrid: (variable: Variable) =>
                     isLVGLProject(variable) ||
                     !variable.persistent ||
-                    !isObjectType(variable.type) ||
                     !isGlobalVariable(variable) ||
-                    !getObjectVariableTypeFromType(
-                        ProjectEditor.getProjectStore(variable),
-                        variable.type
-                    )?.editConstructorParams
+                    variable.type == "object:TCPSocket"
             }
         ],
+        icon: VARIABLE_ICON,
         listLabel: (variable: Variable) => {
             return (
                 <>
-                    {variable.native && <span>[NATIVE] </span>}
-                    {variable.persistent && <span>[PERSISTENT] </span>}
-                    <span>{variable.name} </span>
-                    <em className="font-monospace" style={{ opacity: 0.5 }}>
+                    {!isPropertyDisabled(
+                        variable,
+                        findPropertyByNameInObject(variable, "native")!
+                    ) &&
+                        variable.native && (
+                            <span className="EezStudio_ListLabel_Badge">
+                                NATIVE
+                            </span>
+                        )}
+                    {!isPropertyDisabled(
+                        variable,
+                        findPropertyByNameInObject(variable, "persistent")!
+                    ) &&
+                        variable.persistent && (
+                            <span className="EezStudio_ListLabel_Badge">
+                                PERSISTENT
+                            </span>
+                        )}
+                    <span>{variable.name}</span>
+                    <em
+                        className="font-monospace"
+                        style={{ opacity: 0.5, marginLeft: 8 }}
+                    >
                         {variable.type}
                     </em>
                 </>
@@ -258,8 +552,11 @@ export class Variable extends EezObject {
                             type: "string",
                             validators: [
                                 validators.required,
-                                identifierValidator,
-                                validators.unique({}, parent)
+                                validatorsRenderer.identifierValidator,
+                                uniqueForVariableAndUserProperty(
+                                    {} as any,
+                                    parent
+                                )
                             ]
                         },
                         {
@@ -288,7 +585,8 @@ export class Variable extends EezObject {
 
             let persistent =
                 !ProjectEditor.getFlow(parent) &&
-                isObjectType(result.values.type);
+                isObjectType(result.values.type) &&
+                result.values.type != "object:TCPSocket";
 
             const variableProperties: Partial<Variable> = {
                 name: result.values.name,
@@ -344,7 +642,7 @@ export class Variable extends EezObject {
             } else {
                 if (projectStore.projectTypeTraits.hasFlowSupport) {
                     try {
-                        const { value } = evalConstantExpression(
+                        const { value, valueType } = evalConstantExpression(
                             projectStore.project,
                             variable.defaultValue
                         );
@@ -352,6 +650,7 @@ export class Variable extends EezObject {
                         const error = isValueTypeOf(
                             projectStore.project,
                             value,
+                            valueType,
                             variable.type
                         );
                         if (error) {
@@ -810,10 +1109,19 @@ export class StructureField extends EezObject implements IStructureField {
             {
                 name: "name",
                 type: PropertyType.String,
-                unique: true
+                uniqueIdentifier: true
             },
             variableTypeProperty
         ],
+        listLabel: (field: StructureField, collapsed: boolean) =>
+            collapsed ? (
+                <span>
+                    {field.name}: <i>{field.type}</i>
+                </span>
+            ) : (
+                ""
+            ),
+
         check: (structureField: StructureField, messages: IMessage[]) => {
             if (!structureField.name) {
                 messages.push(propertyNotSetMessage(structureField, "name"));
@@ -861,7 +1169,7 @@ export class StructureField extends EezObject implements IStructureField {
                             type: "string",
                             validators: [
                                 validators.required,
-                                identifierValidator,
+                                validatorsRenderer.identifierValidator,
                                 validators.unique({}, parent)
                             ]
                         },
@@ -922,7 +1230,7 @@ export class Structure extends EezObject implements IStructure {
             {
                 name: "name",
                 type: PropertyType.String,
-                unique: true
+                uniqueIdentifier: true
             },
             {
                 name: "fields",
@@ -943,7 +1251,7 @@ export class Structure extends EezObject implements IStructure {
                             type: "string",
                             validators: [
                                 validators.required,
-                                identifierValidator,
+                                validatorsRenderer.identifierValidator,
                                 validators.unique({}, parent)
                             ]
                         }
@@ -965,7 +1273,12 @@ export class Structure extends EezObject implements IStructure {
             );
 
             return structure;
-        }
+        },
+        icon: (
+            <svg viewBox="0 0 24 24" fill="currentcolor">
+                <path d="M12 7h8a1 1 0 0 0 1-1V2a1 1 0 0 0-1-1h-8a1 1 0 0 0-1 1v1H5V2a1 1 0 0 0-2 0v18a1 1 0 0 0 1 1h7v1a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1v-4a1 1 0 0 0-1-1h-8a1 1 0 0 0-1 1v1H5v-6h6v1a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1v-4a1 1 0 0 0-1-1h-8a1 1 0 0 0-1 1v1H5V5h6v1a1 1 0 0 0 1 1m1 12h6v2h-6Zm0-8h6v2h-6Zm0-8h6v2h-6Z" />
+            </svg>
+        )
     };
 
     constructor() {
@@ -996,7 +1309,12 @@ registerClass("Structure", Structure);
 
 ////////////////////////////////////////////////////////////////////////////////
 
-export class EnumMember extends EezObject {
+export interface IEnumMember {
+    name: string;
+    value: number;
+}
+
+export class EnumMember extends EezObject implements IEnumMember {
     name: string;
     value: number;
 
@@ -1005,13 +1323,15 @@ export class EnumMember extends EezObject {
             {
                 name: "name",
                 type: PropertyType.String,
-                unique: true
+                uniqueIdentifier: true
             },
             {
                 name: "value",
                 type: PropertyType.Number
             }
         ],
+        listLabel: (member: EnumMember, collapsed: boolean) =>
+            collapsed ? `${member.name}: ${member.value}` : "",
         check: (enumMember: EnumMember, messages: IMessage[]) => {
             if (!enumMember.name) {
                 messages.push(propertyNotSetMessage(enumMember, "name"));
@@ -1032,7 +1352,7 @@ export class EnumMember extends EezObject {
                             type: "string",
                             validators: [
                                 validators.required,
-                                identifierValidator,
+                                validatorsRenderer.identifierValidator,
                                 validators.unique({}, parent)
                             ]
                         }
@@ -1075,7 +1395,13 @@ registerClass("EnumMember", EnumMember);
 
 ////////////////////////////////////////////////////////////////////////////////
 
-export class Enum extends EezObject {
+export interface IEnum {
+    name: string;
+    members: IEnumMember[];
+    get membersMap(): Map<string, IEnumMember>;
+}
+
+export class Enum extends EezObject implements IEnum {
     name: string;
     members: EnumMember[];
 
@@ -1084,7 +1410,7 @@ export class Enum extends EezObject {
             {
                 name: "name",
                 type: PropertyType.String,
-                unique: true
+                uniqueIdentifier: true
             },
             {
                 name: "members",
@@ -1092,6 +1418,30 @@ export class Enum extends EezObject {
                 typeClass: EnumMember
             }
         ],
+        icon: (
+            <svg viewBox="0 0 32 32">
+                <defs>
+                    <style>{".cls-2{stroke-width:0}"}</style>
+                </defs>
+                <path
+                    className="cls-2"
+                    d="M19.533 16.07c0-.964.877-1.445 1.788-1.445 1.049 0 1.479.653 1.479 1.925V22H25v-5.673c0-2.235-1.031-3.507-2.871-3.507-1.392 0-2.149.74-2.51 1.702h-.086v-1.496h-2.2V22h2.2zm-4.625 3.918H9.269v-3.06h4.986v-2.011H9.269v-2.905h5.639V10H7v12h7.908z"
+                />
+                <path
+                    className="cls-2"
+                    d="M2 4v24a2 2 0 0 0 2 2h24a2 2 0 0 0 2-2V4a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2m26 24H4V4h24z"
+                />
+                <path
+                    id="_Transparent_Rectangle_"
+                    data-name="&amp;lt;Transparent Rectangle&amp;gt;"
+                    style={{
+                        fill: "none",
+                        strokeWidth: 0
+                    }}
+                    d="M0 0h32v32H0z"
+                />
+            </svg>
+        ),
         propertiesPanelLabel: (enumObject: Enum) => {
             return `Enum: ${enumObject.name}`;
         },
@@ -1105,7 +1455,7 @@ export class Enum extends EezObject {
                             type: "string",
                             validators: [
                                 validators.required,
-                                identifierValidator,
+                                validatorsRenderer.identifierValidator,
                                 validators.unique({}, parent)
                             ]
                         }
@@ -1213,8 +1563,15 @@ export class ProjectVariables extends EezObject {
     }
 
     get enumsMap() {
-        const map = new Map<string, Enum>();
+        const map = new Map<string, IEnum>();
+
         for (const enumDef of this.enums) {
+            map.set(enumDef.name, enumDef);
+        }
+
+        const projectStore = ProjectEditor.getProjectStore(this);
+        const systemEnums = getSystemEnums(projectStore);
+        for (const enumDef of systemEnums) {
             map.set(enumDef.name, enumDef);
         }
         return map;
@@ -1269,16 +1626,3 @@ const feature: ProjectEditorFeature = {
 };
 
 export default feature;
-
-////////////////////////////////////////////////////////////////////////////////
-
-const VALIDATION_MESSAGE_INVALID_IDENTIFIER =
-    "Not a valid identifier. Identifier starts with a letter or an underscore (_), followed by zero or more letters, digits, or underscores. Spaces are not allowed.";
-
-const identifierValidator = (object: any, ruleName: string) => {
-    const value = object[ruleName];
-    if (!parseIdentifier(value) || value.startsWith("$")) {
-        return VALIDATION_MESSAGE_INVALID_IDENTIFIER;
-    }
-    return null;
-};

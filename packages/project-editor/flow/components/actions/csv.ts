@@ -90,18 +90,28 @@ registerActionComponents("Dashboard Specific", [
                 return;
             }
 
-            if (outputType.kind != "array") {
-                context.throwError(`Result output type is not an array`);
+            if (
+                outputType.kind != "array" &&
+                !(outputType.kind == "basic" && outputType.valueType == "json")
+            ) {
+                context.throwError(
+                    `Result output type is not an array or json`
+                );
                 return;
             }
 
-            const elementType = outputType.elementType;
+            let columns;
+            if (outputType.kind == "array") {
+                const elementType = outputType.elementType;
 
-            if (elementType.kind != "object") {
-                context.throwError(
-                    `Result output value type is not an array of struct`
-                );
-                return;
+                if (elementType.kind != "object") {
+                    context.throwError(
+                        `Result output value type is not an array of struct`
+                    );
+                    return;
+                }
+
+                columns = elementType.fields.map(field => field.name);
             }
 
             try {
@@ -113,19 +123,19 @@ registerActionComponents("Dashboard Specific", [
                     input,
                     {
                         delimiter,
-                        columns: elementType.fields.map(field => field.name),
+                        columns,
                         from,
                         to
                     },
                     function (err, records) {
-                        context.endAsyncExecution();
-
                         if (err) {
                             context.throwError(err.toString());
                             return;
                         }
 
                         context.propagateValue("result", records);
+
+                        context.endAsyncExecution();
                     }
                 );
 
@@ -184,6 +194,7 @@ registerActionComponents("Dashboard Specific", [
                 valueType: "boolean"
             }
         ],
+        bodyPropertyName: "input",
         execute: (context: IDashboardComponentContext) => {
             const input = context.evalProperty("input");
             if (input == undefined) {

@@ -27,7 +27,7 @@ import {
     PropertyInfo,
     PropertyProps
 } from "project-editor/core/object";
-import type { Project } from "project-editor/project/project";
+import type { Project, ProjectType } from "project-editor/project/project";
 import { ProjectContext } from "project-editor/project/context";
 import { getPropertyValue } from "project-editor/ui-components/PropertyGrid/utils";
 import type {
@@ -36,6 +36,8 @@ import type {
 } from "project-editor/flow/flow-interfaces";
 
 import type {
+    IEnum,
+    IEnumMember,
     IStructure,
     IStructureField
 } from "project-editor/features/variable/variable";
@@ -65,6 +67,7 @@ export const BASIC_TYPE_NAMES = [
     "stream",
     "widget",
     "json",
+    "event",
     "any"
 ];
 
@@ -94,6 +97,8 @@ export const LVGL_FLOW_BASIC_TYPE_NAMES = [
     "boolean",
     "string",
     "date",
+    "widget",
+    "event",
     "any"
 ];
 
@@ -299,6 +304,80 @@ export function registerSystemStructure(
 
 ////////////////////////////////////////////////////////////////////////////////
 
+class SystemEnum implements IEnum {
+    static SYSTEM_ENUMS: SystemEnum[] = [];
+
+    static getSystemEnums(projectStore: ProjectStore) {
+        return this.SYSTEM_ENUMS.filter(systemEnum => {
+            if (systemEnum.projectTypes == undefined) {
+                return true;
+            }
+
+            if (
+                systemEnum.projectTypes.indexOf(
+                    projectStore.project.settings.general.projectType
+                ) != -1
+            ) {
+                if (projectStore.projectTypeTraits.isLVGL) {
+                    if (systemEnum.lvglVersion == undefined) {
+                        return true;
+                    }
+
+                    if (
+                        systemEnum.lvglVersion ==
+                        projectStore.project.settings.general.lvglVersion
+                    ) {
+                        return true;
+                    }
+                }
+            }
+
+            return false;
+        });
+    }
+
+    constructor(
+        public name: string,
+        public members: IEnumMember[],
+        private projectTypes: ProjectType[] | undefined,
+        private lvglVersion?: "8.3" | "9.0"
+    ) {
+        makeObservable(this, {
+            membersMap: computed
+        });
+    }
+
+    get membersMap() {
+        const map = new Map<string, IEnumMember>();
+        for (const member of this.members) {
+            map.set(member.name, member);
+        }
+        return map;
+    }
+}
+
+export function registerSystemEnum({
+    name,
+    members,
+    projectTypes,
+    lvglVersion
+}: {
+    name: string;
+    members: IEnumMember[];
+    projectTypes: ProjectType[] | undefined;
+    lvglVersion?: "8.3" | "9.0";
+}) {
+    SystemEnum.SYSTEM_ENUMS.push(
+        new SystemEnum(name, members, projectTypes, lvglVersion)
+    );
+}
+
+export function getSystemEnums(projectStore: ProjectStore) {
+    return SystemEnum.getSystemEnums(projectStore);
+}
+
+////////////////////////////////////////////////////////////////////////////////
+
 export function getDefaultValueForType(project: Project, type: string): string {
     if (isObjectType(type)) {
         return "null";
@@ -360,7 +439,7 @@ export function getValueLabel(
         }
     }
 
-    if (isArray(value) || value instanceof Uint8Array) {
+    if (isArray(value)) {
         return `${value.length} element(s)`;
     }
 
@@ -412,6 +491,7 @@ export const VariableTypeSelect = observer(
         dropDownLeft = 0;
         dropDownTop = 0;
         dropDownWidth = 0;
+        dropDownHeight = 0;
 
         constructor(props: any) {
             super(props);
@@ -421,6 +501,7 @@ export const VariableTypeSelect = observer(
                 dropDownLeft: observable,
                 dropDownTop: observable,
                 dropDownWidth: observable,
+                dropDownHeight: observable,
                 setDropDownOpen: action
             });
         }
@@ -466,20 +547,14 @@ export const VariableTypeSelect = observer(
                 this.dropDownTop = rectInputGroup.bottom;
                 this.dropDownWidth = rectInputGroup.width;
 
-                if (
-                    this.dropDownLeft + this.dropDownWidth >
-                    window.innerWidth
-                ) {
-                    this.dropDownLeft = window.innerWidth - this.dropDownWidth;
+                this.dropDownHeight = window.innerHeight - this.dropDownTop;
+                if (this.dropDownHeight > 640) {
+                    this.dropDownHeight = 640;
                 }
 
-                const DROP_DOWN_HEIGHT = 270;
-                if (
-                    this.dropDownTop + DROP_DOWN_HEIGHT + 20 >
-                    window.innerHeight
-                ) {
-                    this.dropDownTop =
-                        window.innerHeight - (DROP_DOWN_HEIGHT + 20);
+                if (this.dropDownHeight < 240) {
+                    this.dropDownHeight = 240;
+                    this.dropDownTop = window.innerHeight - this.dropDownHeight;
                 }
             }
         });
@@ -555,7 +630,12 @@ export const VariableTypeSelect = observer(
                       )
                     : [];
 
-            const enums = project.variables.enums.map(enumDef => (
+            const enumTypes = [
+                ...project.variables.enums,
+                ...getSystemEnums(this.props.project._store)
+            ];
+
+            const enums = enumTypes.map(enumDef => (
                 <li
                     key={enumDef.name}
                     value={addType(`enum:${enumDef.name}`)}
@@ -677,77 +757,74 @@ export const VariableTypeSelect = observer(
                         display: this.dropDownOpen ? "block" : "none",
                         left: this.dropDownLeft,
                         top: this.dropDownTop,
-                        width: this.dropDownWidth
+                        width: this.dropDownWidth,
+                        maxHeight: this.dropDownHeight
                     }}
                 >
-                    <div>
-                        <ul>
-                            <div className="font-monospace">{basicTypes}</div>
+                    <ul>
+                        <div className="font-monospace">{basicTypes}</div>
 
-                            {objectTypes.length > 0 && (
-                                <div>
-                                    <div>Objects</div>
-                                    <div className="font-monospace">
-                                        {objectTypes}
-                                    </div>
+                        {objectTypes.length > 0 && (
+                            <div>
+                                <div>Objects</div>
+                                <div className="font-monospace">
+                                    {objectTypes}
                                 </div>
-                            )}
+                            </div>
+                        )}
 
-                            {enums.length > 0 && (
-                                <div>
-                                    <div>Enums</div>
-                                    <div className="font-monospace">
-                                        {enums}
-                                    </div>
-                                </div>
-                            )}
+                        {enums.length > 0 && (
+                            <div>
+                                <div>Enums</div>
+                                <div className="font-monospace">{enums}</div>
+                            </div>
+                        )}
 
-                            {structures.length > 0 && (
-                                <div>
-                                    <div>Structures</div>
-                                    <div className="font-monospace">
-                                        {structures}
-                                    </div>
+                        {structures.length > 0 && (
+                            <div>
+                                <div>Structures</div>
+                                <div className="font-monospace">
+                                    {structures}
                                 </div>
-                            )}
+                            </div>
+                        )}
 
-                            {arrayOfBasicTypes.length > 0 && (
-                                <div>
-                                    <div>Arrays</div>
-                                    <div className="font-monospace">
-                                        {arrayOfBasicTypes}
-                                    </div>
+                        {arrayOfBasicTypes.length > 0 && (
+                            <div>
+                                <div>Arrays</div>
+                                <div className="font-monospace">
+                                    {arrayOfBasicTypes}
                                 </div>
-                            )}
+                            </div>
+                        )}
 
-                            {arrayOfObjects.length > 0 && (
-                                <div>
-                                    <div>Array of Objects</div>
-                                    <div className="font-monospace">
-                                        {arrayOfObjects}
-                                    </div>
+                        {arrayOfObjects.length > 0 && (
+                            <div>
+                                <div>Array of Objects</div>
+                                <div className="font-monospace">
+                                    {arrayOfObjects}
                                 </div>
-                            )}
+                            </div>
+                        )}
 
-                            {arrayOfEnums.length > 0 && (
-                                <div>
-                                    <div>Array of Enumerations</div>
-                                    <div className="font-monospace">
-                                        {arrayOfEnums}
-                                    </div>
+                        {arrayOfEnums.length > 0 && (
+                            <div>
+                                <div>Array of Enumerations</div>
+                                <div className="font-monospace">
+                                    {arrayOfEnums}
                                 </div>
-                            )}
+                            </div>
+                        )}
 
-                            {arrayOfStructures.length > 0 && (
-                                <div>
-                                    <div>Array of Structures</div>
-                                    <div className="font-monospace">
-                                        {arrayOfStructures}
-                                    </div>
+                        {arrayOfStructures.length > 0 && (
+                            <div>
+                                <div>Array of Structures</div>
+                                <div className="font-monospace">
+                                    {arrayOfStructures}
                                 </div>
-                            )}
-                        </ul>
-                    </div>
+                            </div>
+                        )}
+                    </ul>
                 </div>,
                 document.body
             );
@@ -899,34 +976,42 @@ export const variableTypeProperty: PropertyInfo = {
     name: "type",
     type: PropertyType.String,
     propertyGridColumnComponent: VariableTypeUI,
-    monospaceFont: true,
-    disableSpellcheck: true
+    monospaceFont: true
 };
 
 ////////////////////////////////////////////////////////////////////////////////
 
-export function migrateType(objectJS: any) {
-    if (!objectJS.type) {
+export function migrateType(objectJS: any, propName?: string) {
+    if (!propName) {
+        propName = "type";
+    }
+
+    if (!objectJS[propName]) {
         return;
     }
-    if (objectJS.type == "list") {
-        objectJS.type = "array";
-    } else if (objectJS.type.startsWith("custom:")) {
-        objectJS.type = `object:${objectJS.type.substring("custom:".length)}`;
-    } else if (objectJS.type == "struct") {
-        objectJS.type = `struct:${objectJS.structure}`;
+
+    if (objectJS[propName] == "list") {
+        objectJS[propName] = "array";
+    } else if (objectJS[propName].startsWith("custom:")) {
+        objectJS[propName] = `object:${objectJS[propName].substring(
+            "custom:".length
+        )}`;
+    } else if (objectJS[propName] == "struct") {
+        objectJS[propName] = `struct:${objectJS.structure}`;
         delete objectJS.structure;
-    } else if (objectJS.type == "enum") {
-        objectJS.type = `enum:${objectJS.enum}`;
+    } else if (objectJS[propName] == "enum") {
+        objectJS[propName] = `enum:${objectJS.enum}`;
         delete objectJS.enum;
-    } else if (objectJS.type == "struct:$ActionParams") {
-        objectJS.type = "struct:$ClickEvent";
-    } else if (objectJS.type == "struct:$CheckboxActionParams") {
-        objectJS.type = "struct:$CheckboxChangeEvent";
-    } else if (objectJS.type == "struct:$TextInputActionParams") {
-        objectJS.type = "struct:$TextInputChangeEvent";
-    } else if (objectJS.type == "struct:$DropDownListActionParams") {
-        objectJS.type = "struct:$DropDownListChangeEvent";
+    } else if (objectJS[propName] == "struct:$ActionParams") {
+        objectJS[propName] = "struct:$ClickEvent";
+    } else if (objectJS[propName] == "struct:$CheckboxActionParams") {
+        objectJS[propName] = "struct:$CheckboxChangeEvent";
+    } else if (objectJS[propName] == "struct:$TextInputActionParams") {
+        objectJS[propName] = "struct:$TextInputChangeEvent";
+    } else if (objectJS[propName] == "struct:$DropDownListActionParams") {
+        objectJS[propName] = "struct:$DropDownListChangeEvent";
+    } else if (objectJS[propName] == "object:TCPConnection") {
+        objectJS[propName] = "object:TCPSocket";
     }
 }
 
@@ -1066,6 +1151,7 @@ export function getEnumValues(variable: IVariable): any[] {
 export function isValueTypeOf(
     project: Project,
     value: any,
+    valueType: ValueType,
     type: string
 ): string | null {
     if (value == null) {
@@ -1089,6 +1175,7 @@ export function isValueTypeOf(
                 const result = isValueTypeOf(
                     project,
                     value[i],
+                    "any",
                     arrayElementType!
                 );
                 if (result) {
@@ -1115,7 +1202,12 @@ export function isValueTypeOf(
                     return `unknown field '${key}'`;
                 }
 
-                const result = isValueTypeOf(project, value[key], field.type);
+                const result = isValueTypeOf(
+                    project,
+                    value[key],
+                    "any",
+                    field.type
+                );
                 if (result) {
                     return `${result} => field '${key}' should be of type '${field.type}'`;
                 }
@@ -1154,6 +1246,10 @@ export function isValueTypeOf(
         }
 
         return null;
+    } else if (type == "json") {
+        if (valueType == type) {
+            return null;
+        }
     }
 
     return `not a ${type}`;

@@ -1,6 +1,13 @@
 import os from "os";
 import fs from "fs";
-import { app, dialog, Menu, ipcMain, BrowserWindow } from "electron";
+import {
+    app,
+    dialog,
+    Menu,
+    ipcMain,
+    BrowserWindow,
+    BaseWindow
+} from "electron";
 import { autorun, runInAction } from "mobx";
 
 import {
@@ -44,8 +51,8 @@ function enableMenuItem(
     }
 }
 
-async function openProjectWithFileDialog(focusedWindow: BrowserWindow) {
-    const result = await dialog.showOpenDialog({
+async function openProjectWithFileDialog(focusedWindow: BaseWindow) {
+    const result = await dialog.showOpenDialog(focusedWindow, {
         properties: ["openFile"],
         filters: [
             { name: "EEZ Project", extensions: ["eez-project"] },
@@ -260,7 +267,7 @@ function buildFileMenu(win: IWindow | undefined) {
             {
                 label: "Load Debug Info...",
                 click: async function (item: any, focusedWindow: any) {
-                    const result = await dialog.showOpenDialog({
+                    const result = await dialog.showOpenDialog(focusedWindow, {
                         properties: ["openFile"],
                         filters: [
                             {
@@ -299,7 +306,7 @@ function buildFileMenu(win: IWindow | undefined) {
         {
             label: "Import Instrument Definition...",
             click: async function (item: any, focusedWindow: any) {
-                const result = await dialog.showOpenDialog({
+                const result = await dialog.showOpenDialog(focusedWindow, {
                     properties: ["openFile"],
                     filters: [
                         {
@@ -457,100 +464,117 @@ function buildFileMenu(win: IWindow | undefined) {
 ////////////////////////////////////////////////////////////////////////////////
 
 function buildEditMenu(win: IWindow | undefined) {
-    const editMenu: Electron.MenuItemConstructorOptions = {
-        label: "Edit",
-        submenu: [
-            {
-                id: "undo",
-                label: "Undo",
-                accelerator: "CmdOrCtrl+Z",
-                role: isMacOs() ? "undo" : undefined,
-                click: function (item, focusedWindow) {
-                    if (focusedWindow) {
-                        const win = findWindowByBrowserWindow(focusedWindow);
-                        if (win !== undefined && win.state.undo != null) {
-                            focusedWindow.webContents.send("undo");
-                            return;
-                        }
+    const editSubmenu: Electron.MenuItemConstructorOptions[] = [
+        {
+            id: "undo",
+            label: "Undo",
+            accelerator: "CmdOrCtrl+Z",
+            role: "undo",
+            click: function (item, focusedWindow) {
+                if (focusedWindow) {
+                    const win = findWindowByBrowserWindow(focusedWindow);
+                    if (win !== undefined && win.state.undo != null) {
+                        win.browserWindow.webContents.send("undo");
+                        return;
                     }
+                }
 
-                    undoManager.undo();
-                }
-            },
-            {
-                id: "redo",
-                label: "Redo",
-                accelerator: "CmdOrCtrl+Y",
-                role: isMacOs() ? "redo" : undefined,
-                click: function (item, focusedWindow) {
-                    if (focusedWindow) {
-                        const win = findWindowByBrowserWindow(focusedWindow);
-                        if (win !== undefined && win.state.redo != null) {
-                            focusedWindow.webContents.send("redo");
-                            return;
-                        }
+                undoManager.undo();
+            }
+        },
+        {
+            id: "redo",
+            label: "Redo",
+            accelerator: "CmdOrCtrl+Y",
+            role: "redo",
+            click: function (item, focusedWindow) {
+                if (focusedWindow) {
+                    const win = findWindowByBrowserWindow(focusedWindow);
+                    if (win !== undefined && win.state.redo != null) {
+                        win.browserWindow.webContents.send("redo");
+                        return;
                     }
+                }
 
-                    undoManager.redo();
-                }
-            },
-            {
-                type: "separator"
-            },
-            {
-                label: "Cut",
-                accelerator: "CmdOrCtrl+X",
-                role: isMacOs() ? "cut" : undefined,
-                click: function (item, focusedWindow) {
-                    if (focusedWindow) {
-                        focusedWindow.webContents.send("cut");
-                    }
-                }
-            },
-            {
-                label: "Copy",
-                accelerator: "CmdOrCtrl+C",
-                role: isMacOs() ? "copy" : undefined,
-                click: function (item, focusedWindow) {
-                    if (focusedWindow) {
-                        focusedWindow.webContents.send("copy");
-                    }
-                }
-            },
-            {
-                label: "Paste",
-                accelerator: "CmdOrCtrl+V",
-                role: isMacOs() ? "paste" : undefined,
-                click: function (item, focusedWindow) {
-                    if (focusedWindow) {
-                        focusedWindow.webContents.send("paste");
-                    }
-                }
-            },
-            {
-                label: "Delete",
-                accelerator: "Delete",
-                role: isMacOs() ? "delete" : undefined,
-                click: function (item, focusedWindow) {
-                    if (focusedWindow) {
-                        focusedWindow.webContents.send("delete");
-                    }
-                }
-            },
-            {
-                type: "separator"
-            },
-            {
-                label: "Select All",
-                accelerator: isMacOs() ? "CmdOrCtrl+A" : undefined,
-                role: isMacOs() ? "selectAll" : undefined,
-                click: function (item, focusedWindow) {
-                    if (focusedWindow) {
-                        focusedWindow.webContents.send("select-all");
-                    }
+                undoManager.redo();
+            }
+        },
+        {
+            type: "separator"
+        },
+        {
+            label: "Cut",
+            accelerator: "CmdOrCtrl+X",
+            role: "cut",
+            click: function (item) {
+                if (win) {
+                    win.browserWindow.webContents.send("cut");
                 }
             }
-        ]
+        },
+        {
+            label: "Copy",
+            accelerator: "CmdOrCtrl+C",
+            role: "copy",
+            click: function (item) {
+                if (win) {
+                    win.browserWindow.webContents.send("copy");
+                }
+            }
+        },
+        {
+            label: "Paste",
+            accelerator: "CmdOrCtrl+V",
+            role: "paste",
+            click: function (item) {
+                if (win) {
+                    win.browserWindow.webContents.send("paste");
+                }
+            }
+        },
+        {
+            label: "Delete",
+            accelerator: "Delete",
+            role: "delete",
+            click: function (item) {
+                if (win) {
+                    win.browserWindow.webContents.send("delete");
+                }
+            }
+        },
+        {
+            type: "separator"
+        },
+        {
+            label: "Select All",
+            accelerator: "CmdOrCtrl+A",
+            role: "selectAll",
+            click: function (item) {
+                if (win) {
+                    win.browserWindow.webContents.send("select-all");
+                }
+            }
+        }
+    ];
+
+    if (win?.activeTabType === "project") {
+        editSubmenu.push({
+            type: "separator"
+        });
+        editSubmenu.push({
+            label: "Find Project Component",
+            accelerator: "CmdOrCtrl+Shift+F",
+            click: function (item) {
+                if (win) {
+                    win.browserWindow.webContents.send("findProjectComponent");
+                }
+            }
+        });
+    }
+
+    const editMenu: Electron.MenuItemConstructorOptions = {
+        label: "Edit",
+        submenu: editSubmenu
     };
 
     enableMenuItem(
@@ -580,25 +604,25 @@ function buildViewMenu(win: IWindow | undefined) {
     viewSubmenu.push(
         {
             label: "Home",
-            click: function (item, focusedWindow) {
-                if (focusedWindow) {
-                    focusedWindow.webContents.send("openTab", "home");
+            click: function (item) {
+                if (win) {
+                    win.browserWindow.webContents.send("openTab", "home");
                 }
             }
         },
         {
             label: "History",
-            click: function (item, focusedWindow) {
-                if (focusedWindow) {
-                    focusedWindow.webContents.send("openTab", "history");
+            click: function (item) {
+                if (win) {
+                    win.browserWindow.webContents.send("openTab", "history");
                 }
             }
         },
         {
             label: "Shortcuts and Groups",
-            click: function (item, focusedWindow) {
-                if (focusedWindow) {
-                    focusedWindow.webContents.send(
+            click: function (item) {
+                if (win) {
+                    win.browserWindow.webContents.send(
                         "openTab",
                         "shortcutsAndGroups"
                     );
@@ -607,9 +631,9 @@ function buildViewMenu(win: IWindow | undefined) {
         },
         {
             label: "Noteboooks",
-            click: function (item, focusedWindow) {
-                if (focusedWindow) {
-                    focusedWindow.webContents.send(
+            click: function (item) {
+                if (win) {
+                    win.browserWindow.webContents.send(
                         "openTab",
                         "homeSection_notebooks"
                     );
@@ -618,17 +642,28 @@ function buildViewMenu(win: IWindow | undefined) {
         },
         {
             label: "Extensions",
-            click: function (item, focusedWindow) {
-                if (focusedWindow) {
-                    focusedWindow.webContents.send("openTab", "extensions");
+            click: function (item) {
+                if (win) {
+                    win.browserWindow.webContents.send("openTab", "extensions");
                 }
             }
         },
         {
             label: "Settings",
-            click: function (item, focusedWindow) {
-                if (focusedWindow) {
-                    focusedWindow.webContents.send("openTab", "settings");
+            click: function (item) {
+                if (win) {
+                    win.browserWindow.webContents.send("openTab", "settings");
+                }
+            }
+        },
+        {
+            type: "separator"
+        },
+        {
+            label: "Scrapbook for Project Editor",
+            click: function (item) {
+                if (win) {
+                    win.browserWindow.webContents.send("showScrapbookManager");
                 }
             }
         },
@@ -711,10 +746,23 @@ function buildViewMenu(win: IWindow | undefined) {
         });
 
         viewSubmenu.push({
+            label: settings.showComponentsPaletteInProjectEditor
+                ? "Hide Components Palette"
+                : "Show Components Palette",
+            click: function (item) {
+                if (win) {
+                    win.browserWindow.webContents.send(
+                        "toggleComponentsPalette"
+                    );
+                }
+            }
+        });
+
+        viewSubmenu.push({
             label: "Reset Layout",
-            click: function (item, focusedWindow) {
-                if (focusedWindow) {
-                    focusedWindow.webContents.send("resetLayoutModels");
+            click: function (item) {
+                if (win) {
+                    win.browserWindow.webContents.send("resetLayoutModels");
                 }
             }
         });
@@ -725,11 +773,35 @@ function buildViewMenu(win: IWindow | undefined) {
     }
 
     viewSubmenu.push({
+        label: "Next Tab",
+        accelerator: "Ctrl+Tab",
+        click: function (item) {
+            if (win) {
+                win.browserWindow.webContents.send("show-next-tab");
+            }
+        }
+    });
+
+    viewSubmenu.push({
+        label: "Previous Tab",
+        accelerator: "Ctrl+Shift+Tab",
+        click: function (item) {
+            if (win) {
+                win.browserWindow.webContents.send("show-previous-tab");
+            }
+        }
+    });
+
+    viewSubmenu.push({
+        type: "separator"
+    });
+
+    viewSubmenu.push({
         label: "Reload",
         accelerator: "CmdOrCtrl+R",
-        click: function (item, focusedWindow) {
-            if (focusedWindow) {
-                focusedWindow.webContents.send("reload");
+        click: function (item) {
+            if (win) {
+                win.browserWindow.webContents.send("reload");
                 //focusedWindow.webContents.reload();
                 //focusedWindow.webContents.clearHistory();
             }

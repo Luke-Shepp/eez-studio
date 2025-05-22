@@ -13,7 +13,8 @@ import {
     getProperty,
     IObjectClassInfo,
     isPropertyHidden,
-    MessageType
+    MessageType,
+    isFlowPropertyBuildable
 } from "project-editor/core/object";
 import {
     getChildOfObject,
@@ -38,7 +39,8 @@ import {
 import { makeEndInstruction } from "project-editor/flow/expression/instructions";
 import {
     FIRST_DASHBOARD_ACTION_COMPONENT_TYPE,
-    FIRST_DASHBOARD_WIDGET_COMPONENT_TYPE
+    FIRST_DASHBOARD_WIDGET_COMPONENT_TYPE,
+    FIRST_LVGL_WIDGET_COMPONENT_TYPE
 } from "project-editor/flow/components/component-types";
 import {
     BASIC_TYPE_NAMES,
@@ -106,7 +108,12 @@ function getComponentIdOfComponent(assets: Assets, component: Component) {
                 if (component instanceof ProjectEditor.ActionComponentClass) {
                     flowComponentId = assets.nextDashboardActionComponentId++;
                 } else {
-                    flowComponentId = assets.nextDashboardWidgetComponentId++;
+                    if (assets.projectStore.projectTypeTraits.isLVGL) {
+                        flowComponentId = assets.nextLVGLWidgetComponentId++;
+                    } else {
+                        flowComponentId =
+                            assets.nextDashboardWidgetComponentId++;
+                    }
                 }
                 assets.dashboardComponentClassNameToComponentIdMap[name] =
                     flowComponentId;
@@ -193,29 +200,39 @@ function buildComponent(
     dataBuffer.writeArray(properties, (propertyInfo, propertyIndex) => {
         if (!isPropertyHidden(component, propertyInfo)) {
             try {
-                let expression = getProperty(component, propertyInfo.name);
+                if (isFlowPropertyBuildable(component, propertyInfo)) {
+                    let expression = getProperty(component, propertyInfo.name);
 
-                let flowProperty;
-                if (propertyInfo.flowProperty) {
-                    if (typeof propertyInfo.flowProperty == "string") {
-                        flowProperty = propertyInfo.flowProperty;
+                    let flowProperty;
+                    if (propertyInfo.flowProperty) {
+                        if (typeof propertyInfo.flowProperty == "string") {
+                            flowProperty = propertyInfo.flowProperty;
+                        } else {
+                            flowProperty = propertyInfo.flowProperty(component);
+                        }
+                    }
+
+                    if (flowProperty == "assignable") {
+                        buildAssignableExpression(
+                            assets,
+                            dataBuffer,
+                            component,
+                            expression
+                        );
                     } else {
-                        flowProperty = propertyInfo.flowProperty(component);
+                        if (flowProperty == "template-literal") {
+                            expression =
+                                templateLiteralToExpression(expression);
+                        }
+                        buildExpression(
+                            assets,
+                            dataBuffer,
+                            component,
+                            expression
+                        );
                     }
-                }
-
-                if (flowProperty == "assignable") {
-                    buildAssignableExpression(
-                        assets,
-                        dataBuffer,
-                        component,
-                        expression
-                    );
                 } else {
-                    if (flowProperty == "template-literal") {
-                        expression = templateLiteralToExpression(expression);
-                    }
-                    buildExpression(assets, dataBuffer, component, expression);
+                    dataBuffer.writeUint16NonAligned(makeEndInstruction());
                 }
             } catch (err) {
                 assets.projectStore.outputSectionsStore.write(
@@ -265,7 +282,8 @@ function buildComponent(
         const connectionLines = flow.connectionLines.filter(
             connectionLine =>
                 connectionLine.sourceComponent === component &&
-                connectionLine.output == output.name
+                connectionLine.output == output.name &&
+                !connectionLine.disabled
         );
 
         const connectionLinesMap: {
@@ -366,14 +384,13 @@ function buildFlow(assets: Assets, dataBuffer: DataBuffer, flow: Flow) {
     );
 
     // localVariables
-    assets.map.flows[flowIndex].localVariables = flow.localVariables.map(
-        (localVariable, index) => ({
+    assets.map.flows[flowIndex].localVariables =
+        flow.userPropertiesAndLocalVariables.map((localVariable, index) => ({
             index,
             name: localVariable.name
-        })
-    );
+        }));
     dataBuffer.writeArray(
-        flow.localVariables,
+        flow.userPropertiesAndLocalVariables,
         localVariable =>
             buildVariableFlowValue(assets, dataBuffer, localVariable),
         8
@@ -439,6 +456,11 @@ function buildFlow(assets: Assets, dataBuffer: DataBuffer, flow: Flow) {
             dataBuffer.writeInt16(-1);
             dataBuffer.writeInt16(-1);
         }
+    });
+
+    // userPropertiesAssignable
+    dataBuffer.writeNumberArray(flow.userProperties, userProperty => {
+        dataBuffer.writeUint8(userProperty.assignable ? 1 : 0);
     });
 }
 
@@ -514,6 +536,10 @@ export function buildFlowDefs(assets: Assets) {
         `${TAB}FIRST_DASHBOARD_WIDGET_COMPONENT_TYPE = ${FIRST_DASHBOARD_WIDGET_COMPONENT_TYPE}`
     );
 
+    componentTypeEnumItems.push(
+        `${TAB}FIRST_LVGL_WIDGET_COMPONENT_TYPE = ${FIRST_LVGL_WIDGET_COMPONENT_TYPE}`
+    );
+
     defs.push(
         `enum ComponentTypes {\n${componentTypeEnumItems.join(",\n")}\n};`
     );
@@ -546,6 +572,19 @@ export function buildFlowDefs(assets: Assets) {
         );
 
         if (enumItems.length > 0) {
+            if (
+                componentType.objectClass ==
+                    ProjectEditor.UserWidgetWidgetClass ||
+                componentType.objectClass ==
+                    ProjectEditor.LVGLUserWidgetWidgetClass
+            ) {
+                enumItems.push(
+                    `${TAB}${`${componentName}_USER_PROPERTIES_START`} = ${
+                        enumItems.length
+                    }`
+                );
+            }
+
             defs.push(
                 `enum Component_${componentName}_Properties {\n${enumItems.join(
                     ",\n"
@@ -624,17 +663,32 @@ export function buildFlowDefs(assets: Assets) {
 
     // enum object types
     const objectTypeEnumItems = [];
+    let valueTypeIndex = 0;
     for (const [objectTypeName, _] of objectVariableTypes) {
+        valueTypeIndex = assets.projectStore.typesStore.getValueTypeIndex(
+            `object:${objectTypeName}`
+        )!;
+
+        if (objectTypeEnumItems.length == 0) {
+            objectTypeEnumItems.push(
+                `${TAB}FIRST_OBJECT_TYPE = ${valueTypeIndex}`
+            );
+        }
+
         objectTypeEnumItems.push(
             `${TAB}${getName(
                 "OBJECT_TYPE_",
                 objectTypeName,
                 NamingConvention.UnderscoreUpperCase
-            )} = ${assets.projectStore.typesStore.getValueTypeIndex(
-                `object:${objectTypeName}`
-            )}`
+            )} = ${valueTypeIndex}`
         );
     }
+
+    if (objectTypeEnumItems.length == 0) {
+        objectTypeEnumItems.push(`${TAB}FIRST_OBJECT_TYPE = ${valueTypeIndex}`);
+    }
+
+    objectTypeEnumItems.push(`${TAB}LAST_OBJECT_TYPE = ${valueTypeIndex}`);
 
     defs.push(`enum ObjectTypes {\n${objectTypeEnumItems.join(",\n")}\n};`);
 
@@ -692,6 +746,13 @@ export function buildFlowDefs(assets: Assets) {
 }
 
 export function buildFlowStructs(assets: Assets) {
+    if (
+        assets.projectStore.projectTypeTraits.isLVGL &&
+        !assets.projectStore.projectTypeTraits.hasFlowSupport
+    ) {
+        return "";
+    }
+
     const defs = [];
 
     // enum FlowStructures
@@ -773,6 +834,13 @@ export function buildFlowStructs(assets: Assets) {
 }
 
 export function buildFlowStructValues(assets: Assets) {
+    if (
+        assets.projectStore.projectTypeTraits.isLVGL &&
+        !assets.projectStore.projectTypeTraits.hasFlowSupport
+    ) {
+        return "";
+    }
+
     const build = new Build();
 
     build.startBuild();

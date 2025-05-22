@@ -80,7 +80,8 @@ import {
 } from "project-editor/build/helper";
 import {
     FIRST_DASHBOARD_ACTION_COMPONENT_TYPE,
-    FIRST_DASHBOARD_WIDGET_COMPONENT_TYPE
+    FIRST_DASHBOARD_WIDGET_COMPONENT_TYPE,
+    FIRST_LVGL_WIDGET_COMPONENT_TYPE
 } from "project-editor/flow/components/component-types";
 
 import { DummyDataBuffer, DataBuffer } from "project-editor/build/data-buffer";
@@ -89,6 +90,7 @@ import { LVGLBuild } from "project-editor/lvgl/build";
 import { ProjectEditor } from "project-editor/project-editor-interface";
 import type { AssetsMap } from "eez-studio-types";
 import { isDashboardProject } from "project-editor/project/project-type-traits";
+import type { LVGLStyle } from "project-editor/lvgl/style";
 
 export { DummyDataBuffer, DataBuffer } from "project-editor/build/data-buffer";
 
@@ -101,6 +103,7 @@ export class Assets {
     actions: Action[];
     pages: (Page | undefined)[];
     styles: Style[];
+    lvglStyles: LVGLStyle[];
     fonts: Font[];
     bitmaps: Bitmap[];
     colors: string[];
@@ -158,7 +161,9 @@ export class Assets {
         typeIndexes: {},
         displayWidth: this.displayWidth,
         displayHeight: this.displayHeight,
-        bitmaps: []
+        bitmaps: [],
+        lvglWidgetIndexes: {},
+        lvglWidgetGeneratedIdentifiers: {}
     };
 
     dashboardComponentClassNameToComponentIdMap: {
@@ -166,9 +171,14 @@ export class Assets {
     } = {};
     nextDashboardActionComponentId = FIRST_DASHBOARD_ACTION_COMPONENT_TYPE;
     nextDashboardWidgetComponentId = FIRST_DASHBOARD_WIDGET_COMPONENT_TYPE;
+    nextLVGLWidgetComponentId = FIRST_LVGL_WIDGET_COMPONENT_TYPE;
     dashboardComponentTypeToNameMap: {
         [componentType: number]: string;
     } = {};
+
+    isUsingCrypyoSha256: boolean = false;
+
+    lvglBuild: LVGLBuild;
 
     get projectStore() {
         return this.rootProject._store;
@@ -204,6 +214,11 @@ export class Assets {
         buildConfiguration: BuildConfiguration | undefined,
         public option: "check" | "buildAssets" | "buildFiles"
     ) {
+        if (rootProject.projectTypeTraits.isLVGL) {
+            this.lvglBuild = new LVGLBuild(this);
+            this.lvglBuild.firtsPassStart();
+        }
+
         this.projectStore.typesStore.reset();
 
         this.getConstantIndex(undefined, "undefined"); // undefined has value index 0
@@ -381,6 +396,7 @@ export class Assets {
         // styles
         //
         this.styles = [];
+        this.lvglStyles = [];
         this.getAssets<Style>(
             project => project.allStyles,
             style => style.id != undefined
@@ -822,39 +838,86 @@ export class Assets {
         return index;
     }
 
+    markBitmapUsed(bitmap: Bitmap) {
+        this.bitmaps.push(bitmap);
+    }
+
+    markFontUsed(font: Font) {
+        this.fonts.push(font);
+    }
+
+    markLvglStyleUsed(style: LVGLStyle) {
+        this.lvglStyles.push(style);
+    }
+
     reportUnusedAssets() {
         this.projects.forEach(project => {
-            if (project.allStyles?.length > 0) {
-                project.allStyles.forEach(style => {
-                    if (
-                        !this.styles.find(usedStyle => {
-                            if (!usedStyle) {
-                                return false;
-                            }
+            if (this.projectStore.projectTypeTraits.isLVGL) {
+                if (project.allLvglStyles?.length > 0) {
+                    project.allLvglStyles.forEach(style => {
+                        if (
+                            !this.lvglStyles.find(usedStyle => {
+                                if (!usedStyle) {
+                                    return false;
+                                }
 
-                            if (usedStyle == style) {
-                                return true;
-                            }
-
-                            let baseStyle = usedStyle.parentStyle;
-                            while (baseStyle) {
-                                if (baseStyle == style) {
+                                if (usedStyle == style) {
                                     return true;
                                 }
-                                baseStyle = baseStyle.parentStyle;
-                            }
 
-                            return false;
-                        })
-                    ) {
-                        this.projectStore.outputSectionsStore.write(
-                            Section.OUTPUT,
-                            MessageType.INFO,
-                            "Unused style: " + style.name,
-                            style
-                        );
-                    }
-                });
+                                let baseStyle = usedStyle.parentStyle;
+                                while (baseStyle) {
+                                    if (baseStyle == style) {
+                                        return true;
+                                    }
+                                    baseStyle = baseStyle.parentStyle;
+                                }
+
+                                return false;
+                            })
+                        ) {
+                            this.projectStore.outputSectionsStore.write(
+                                Section.OUTPUT,
+                                MessageType.INFO,
+                                "Unused style: " + style.name,
+                                style
+                            );
+                        }
+                    });
+                }
+            } else {
+                if (project.allStyles?.length > 0) {
+                    project.allStyles.forEach(style => {
+                        if (
+                            !this.styles.find(usedStyle => {
+                                if (!usedStyle) {
+                                    return false;
+                                }
+
+                                if (usedStyle == style) {
+                                    return true;
+                                }
+
+                                let baseStyle = usedStyle.parentStyle;
+                                while (baseStyle) {
+                                    if (baseStyle == style) {
+                                        return true;
+                                    }
+                                    baseStyle = baseStyle.parentStyle;
+                                }
+
+                                return false;
+                            })
+                        ) {
+                            this.projectStore.outputSectionsStore.write(
+                                Section.OUTPUT,
+                                MessageType.INFO,
+                                "Unused style: " + style.name,
+                                style
+                            );
+                        }
+                    });
+                }
             }
 
             if (project.fonts?.length > 0) {
@@ -939,14 +1002,7 @@ export class Assets {
     }
 
     registerJSONValue(value: any) {
-        for (let i = 0; i < this.jsonValues.length; i++) {
-            if (JSON.stringify(value) == JSON.stringify(this.jsonValues[i])) {
-                return i + 1;
-            }
-        }
-
         this.jsonValues.push(value);
-
         return this.jsonValues.length;
     }
 
@@ -1021,13 +1077,27 @@ export class Assets {
     getComponentProperties(component: Component) {
         const classInfo = getClassInfo(component);
 
-        const properties = classInfo.properties.filter(propertyInfo =>
-            isFlowProperty(component, propertyInfo, [
-                "input",
-                "template-literal",
-                "assignable"
-            ])
-        );
+        let properties;
+
+        if (component instanceof ProjectEditor.LVGLUserWidgetWidgetClass) {
+            // Always build all the properties for the LVGLUserWidgetWidget,
+            // so that user properties always start at the LVGL_USER_WIDGET_WIDGET_USER_PROPERTIES_START
+            properties = classInfo.properties.filter(propertyInfo =>
+                isFlowProperty(undefined, propertyInfo, [
+                    "input",
+                    "template-literal",
+                    "assignable"
+                ])
+            );
+        } else {
+            properties = classInfo.properties.filter(propertyInfo =>
+                isFlowProperty(component, propertyInfo, [
+                    "input",
+                    "template-literal",
+                    "assignable"
+                ])
+            );
+        }
 
         if (classInfo.getAdditionalFlowProperties) {
             return [
@@ -1224,6 +1294,13 @@ export class Assets {
         this.map.typeIndexes = this.projectStore.typesStore.typeIndexes;
 
         this.map.bitmaps = this.bitmaps.map(bitmap => bitmap.name);
+
+        if (this.projectStore.projectTypeTraits.isLVGL) {
+            this.lvglBuild.lvglObjectIdentifiers.fromPage.identifiers.forEach(
+                (identifier, widgetIndex) =>
+                    (this.map.lvglWidgetIndexes[identifier] = widgetIndex)
+            );
+        }
     }
 
     get displayWidth() {
@@ -1298,6 +1375,9 @@ function buildHeaderData(
     if (uncompressed) {
         // external
         dataBuffer.writeUint8(0);
+
+        // reserved
+        dataBuffer.writeUint32(0);
     } else {
         // reserved
         dataBuffer.writeUint8(0);
@@ -1453,7 +1533,13 @@ export async function buildAssets(
 
     const assets = new Assets(project, buildConfiguration, option);
 
-    assets.reportUnusedAssets();
+    if (project.projectTypeTraits.isLVGL) {
+        await assets.lvglBuild.firstPassFinish();
+    }
+
+    if (!project.projectTypeTraits.isLVGL) {
+        assets.reportUnusedAssets();
+    }
 
     // build enum's
     if (option != "buildAssets") {
@@ -1543,77 +1629,95 @@ export async function buildAssets(
         );
 
         if (option != "buildAssets") {
-            if (buildAssetsDecl) {
-                result.GUI_ASSETS_DECL = buildGuiAssetsDecl(uncompressedData);
-            }
+            if (
+                !(
+                    project.projectTypeTraits.isLVGL &&
+                    !project.projectTypeTraits.hasFlowSupport
+                )
+            ) {
+                const lvglCompressFlowDefinition =
+                    project.projectTypeTraits.isLVGL &&
+                    project.settings.build.generateSourceCodeForEezFramework &&
+                    project.settings.build.compressFlowDefinition;
 
-            if (buildAssetsDeclCompressed) {
-                result.GUI_ASSETS_DECL_COMPRESSED =
-                    buildGuiAssetsDecl(compressedData);
-            }
+                if (buildAssetsDecl) {
+                    result.GUI_ASSETS_DECL = buildGuiAssetsDecl(
+                        lvglCompressFlowDefinition
+                            ? compressedData
+                            : uncompressedData
+                    );
+                }
 
-            if (buildAssetsDef) {
-                result.GUI_ASSETS_DEF = await buildGuiAssetsDef(
-                    uncompressedData
-                );
-            }
+                if (buildAssetsDeclCompressed) {
+                    result.GUI_ASSETS_DECL_COMPRESSED =
+                        buildGuiAssetsDecl(compressedData);
+                }
 
-            if (buildAssetsDefCompressed) {
-                result.GUI_ASSETS_DEF_COMPRESSED = await buildGuiAssetsDef(
-                    compressedData
-                );
+                if (buildAssetsDef) {
+                    result.GUI_ASSETS_DEF = await buildGuiAssetsDef(
+                        lvglCompressFlowDefinition
+                            ? compressedData
+                            : uncompressedData
+                    );
+                }
+
+                if (buildAssetsDefCompressed) {
+                    result.GUI_ASSETS_DEF_COMPRESSED = await buildGuiAssetsDef(
+                        compressedData
+                    );
+                }
+            } else {
+                if (buildAssetsDecl) {
+                    result.GUI_ASSETS_DECL = "";
+                }
+
+                if (buildAssetsDeclCompressed) {
+                    result.GUI_ASSETS_DECL_COMPRESSED = "";
+                }
+
+                if (buildAssetsDef) {
+                    result.GUI_ASSETS_DEF = "";
+                }
+
+                if (buildAssetsDefCompressed) {
+                    result.GUI_ASSETS_DEF_COMPRESSED = "";
+                }
             }
         }
 
         if (buildAssetsData) {
             result.GUI_ASSETS_DATA = compressedData;
         }
-
-        if (buildAssetsDataMap) {
-            assets.finalizeMap();
-
-            result.GUI_ASSETS_DATA_MAP = JSON.stringify(
-                assets.map,
-                undefined,
-                2
-            );
-
-            result.GUI_ASSETS_DATA_MAP_JS = assets.map;
-        }
     }
 
     if (option != "buildAssets") {
         if (assets.projectStore.projectTypeTraits.isLVGL) {
-            const lvglBuild = new LVGLBuild(assets);
-
-            // PASS 1 (find out which LVGL objects are accessible through global objects structure)
-            await lvglBuild.buildScreensDef();
-
-            // PASS 2
             if (!sectionNames || sectionNames.indexOf("LVGL_INCLUDE") !== -1) {
                 result.LVGL_INCLUDE = `#include <${assets.projectStore.project.settings.build.lvglInclude}>`;
             }
 
             if (
                 !sectionNames ||
-                sectionNames.indexOf("LVGL_SCREENS_DECL") !== -1
+                sectionNames.indexOf("LVGL_STYLES_DECL") !== -1
             ) {
-                result.LVGL_SCREENS_DECL = await lvglBuild.buildScreensDecl();
+                result.LVGL_STYLES_DECL =
+                    await assets.lvglBuild.buildStylesDef();
+            }
+
+            if (
+                !sectionNames ||
+                sectionNames.indexOf("LVGL_STYLES_DEF") !== -1
+            ) {
+                result.LVGL_STYLES_DEF =
+                    await assets.lvglBuild.buildStylesDecl();
             }
 
             if (
                 !sectionNames ||
                 sectionNames.indexOf("LVGL_SCREENS_DEF") !== -1
             ) {
-                result.LVGL_SCREENS_DEF = await lvglBuild.buildScreensDef();
-            }
-
-            if (
-                !sectionNames ||
-                sectionNames.indexOf("LVGL_SCREENS_DECL_EXT") !== -1
-            ) {
-                result.LVGL_SCREENS_DECL_EXT =
-                    await lvglBuild.buildScreensDeclExt();
+                result.LVGL_SCREENS_DEF =
+                    await assets.lvglBuild.buildScreensDef();
             }
 
             if (
@@ -1621,35 +1725,55 @@ export async function buildAssets(
                 sectionNames.indexOf("LVGL_SCREENS_DEF_EXT") !== -1
             ) {
                 result.LVGL_SCREENS_DEF_EXT =
-                    await lvglBuild.buildScreensDefExt();
+                    await assets.lvglBuild.buildScreensDefExt();
+            }
+
+            if (
+                !sectionNames ||
+                sectionNames.indexOf("LVGL_SCREENS_DECL") !== -1
+            ) {
+                result.LVGL_SCREENS_DECL =
+                    await assets.lvglBuild.buildScreensDecl();
+            }
+
+            if (
+                !sectionNames ||
+                sectionNames.indexOf("LVGL_SCREENS_DECL_EXT") !== -1
+            ) {
+                result.LVGL_SCREENS_DECL_EXT =
+                    await assets.lvglBuild.buildScreensDeclExt();
             }
 
             if (
                 !sectionNames ||
                 sectionNames.indexOf("LVGL_IMAGES_DECL") !== -1
             ) {
-                result.LVGL_IMAGES_DECL = await lvglBuild.buildImagesDecl();
+                result.LVGL_IMAGES_DECL =
+                    await assets.lvglBuild.buildImagesDecl();
             }
 
             if (
                 !sectionNames ||
                 sectionNames.indexOf("LVGL_IMAGES_DEF") !== -1
             ) {
-                result.LVGL_IMAGES_DEF = await lvglBuild.buildImagesDef();
+                result.LVGL_IMAGES_DEF =
+                    await assets.lvglBuild.buildImagesDef();
             }
 
             if (
                 !sectionNames ||
                 sectionNames.indexOf("LVGL_FONTS_DECL") !== -1
             ) {
-                result.LVGL_FONTS_DECL = await lvglBuild.buildFontsDecl();
+                result.LVGL_FONTS_DECL =
+                    await assets.lvglBuild.buildFontsDecl();
             }
 
             if (
                 !sectionNames ||
                 sectionNames.indexOf("LVGL_ACTIONS_DECL") !== -1
             ) {
-                result.LVGL_ACTIONS_DECL = await lvglBuild.buildActionsDecl();
+                result.LVGL_ACTIONS_DECL =
+                    await assets.lvglBuild.buildActionsDecl();
             }
 
             if (
@@ -1657,14 +1781,15 @@ export async function buildAssets(
                 sectionNames.indexOf("LVGL_ACTIONS_ARRAY_DEF") !== -1
             ) {
                 result.LVGL_ACTIONS_ARRAY_DEF =
-                    await lvglBuild.buildActionsArrayDef();
+                    await assets.lvglBuild.buildActionsArrayDef();
             }
 
             if (
                 !sectionNames ||
                 sectionNames.indexOf("LVGL_VARS_DECL") !== -1
             ) {
-                result.LVGL_VARS_DECL = await lvglBuild.buildVariablesDecl();
+                result.LVGL_VARS_DECL =
+                    await assets.lvglBuild.buildVariablesDecl();
             }
 
             if (
@@ -1672,33 +1797,47 @@ export async function buildAssets(
                 sectionNames.indexOf("LVGL_NATIVE_VARS_TABLE_DEF") !== -1
             ) {
                 result.LVGL_NATIVE_VARS_TABLE_DEF =
-                    await lvglBuild.buildNativeVarsTableDef();
+                    await assets.lvglBuild.buildNativeVarsTableDef();
             }
 
             if (
                 !sectionNames ||
-                sectionNames.indexOf("LVGL_STYLES_DECL") !== -1
+                sectionNames.indexOf("EEZ_FOR_LVGL_CHECK") !== -1
             ) {
-                result.LVGL_STYLES_DECL = await lvglBuild.buildStylesDef();
+                result.EEZ_FOR_LVGL_CHECK =
+                    await assets.lvglBuild.buildEezForLvglCheck();
             }
 
             if (
                 !sectionNames ||
-                sectionNames.indexOf("LVGL_STYLES_DEF") !== -1
+                sectionNames.indexOf("LVGL_LOAD_FIRST_SCREEN") !== -1
             ) {
-                result.LVGL_STYLES_DEF = await lvglBuild.buildStylesDecl();
+                result.LVGL_LOAD_FIRST_SCREEN =
+                    await assets.lvglBuild.buildLoadFirstScreen();
             }
 
             if (option == "buildFiles") {
-                await lvglBuild.copyBitmapFiles();
-                await lvglBuild.copyFontFiles();
+                await assets.lvglBuild.copyBitmapFiles();
+                await assets.lvglBuild.copyFontFiles();
             }
         }
+
+        assets.reportUnusedAssets();
+    }
+
+    if (buildAssetsDataMap) {
+        assets.finalizeMap();
+
+        result.GUI_ASSETS_DATA_MAP = JSON.stringify(assets.map, undefined, 2);
+
+        result.GUI_ASSETS_DATA_MAP_JS = assets.map;
     }
 
     if (option == "buildAssets") {
         return result;
     }
+
+    result.EEZ_FLOW_IS_USING_CRYPTO_SHA256 = assets.isUsingCrypyoSha256;
 
     return Object.assign(
         result,

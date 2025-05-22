@@ -13,6 +13,7 @@ import type {
     SelectHistoryItemsSpecification
 } from "instrument/window/history/history";
 import type { IHistoryItem } from "instrument/window/history/item";
+import { historySessions, SESSION_FREE_ID } from "./session/store";
 
 ////////////////////////////////////////////////////////////////////////////////
 
@@ -105,8 +106,6 @@ export const HistoryItems = observer(
                 let className = classNames(
                     `EezStudio_HistoryItemEnclosure EezStudio_HistoryItem_${historyItem.id}`,
                     {
-                        EezStudio_HistoryItemEnclosure_Session:
-                            historyItem.type.startsWith("activity-log/session"),
                         selected:
                             !this.props.selectHistoryItemsSpecification &&
                             historyItem.selected,
@@ -196,6 +195,9 @@ export const HistoryItems = observer(
                             event.preventDefault();
                         }}
                         onContextMenu={event => {
+                            event.preventDefault();
+                            event.stopPropagation();
+
                             if (this.props.selectHistoryItemsSpecification) {
                                 return;
                             }
@@ -224,7 +226,20 @@ export const HistoryItems = observer(
                                     })
                                 );
                             } else {
-                                if (this.props.showInHistory) {
+                                console.log(
+                                    historyItem.sid,
+                                    historySessions.selectedSession.id
+                                );
+
+                                if (
+                                    (this.props.showInHistory &&
+                                        historyItem.sid ==
+                                            historySessions.selectedSession
+                                                .id) ||
+                                    (historyItem.sid == null &&
+                                        historySessions.selectedSession.id ==
+                                            SESSION_FREE_ID)
+                                ) {
                                     menu.append(
                                         new MenuItem({
                                             label: "Show in History",
@@ -247,6 +262,14 @@ export const HistoryItems = observer(
                         }}
                         draggable={true}
                         onDragStart={event => {
+                            console.log(event);
+                            if (
+                                event.target instanceof HTMLVideoElement ||
+                                event.target instanceof HTMLAudioElement
+                            ) {
+                                return;
+                            }
+
                             event.stopPropagation();
                             event.dataTransfer.effectAllowed = "copy";
                             event.dataTransfer.setData(
@@ -371,19 +394,19 @@ export class HistoryListComponentClass extends React.Component<{
 
         let c = 0;
 
-        const scrollIntoView = (() => {
+        const scrollIntoView = () => {
             const element = $(this.div).find(
                 `.EezStudio_HistoryItem_${historyItem.id}`
             )[0];
             if (element) {
-                element.scrollIntoView({ block: "center" });
+                element.scrollIntoView({ block: "nearest" });
             }
             if (++c < 5) {
                 setTimeout(scrollIntoView, 10);
             } else {
                 this.autoReloadEnabled = true;
             }
-        }).bind(this);
+        };
 
         scrollIntoView();
     }

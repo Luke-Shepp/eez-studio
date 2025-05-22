@@ -9,7 +9,6 @@ import {
     isPropertyEnumerable,
     getParent,
     getKey,
-    EezClass,
     isSubclassOf,
     ClassInfo,
     PropertyProps,
@@ -34,7 +33,7 @@ import type { ProjectStore } from "project-editor/store";
 
 import {
     checkClipboard,
-    copyToClipboard,
+    copyProjectEditorDataToClipboard,
     objectToClipboardData
 } from "project-editor/store/clipboard";
 
@@ -44,6 +43,9 @@ import { confirm } from "project-editor/core/util";
 import type { Flow } from "project-editor/flow/flow";
 
 import { isArray } from "eez-studio-shared/util";
+
+import { getClass, getClassInfo } from "project-editor/core/object";
+export { getClass, getClassInfo } from "project-editor/core/object";
 
 ////////////////////////////////////////////////////////////////////////////////
 
@@ -182,16 +184,31 @@ export function objectToString(object: IEezObject) {
 
     if (isValue(object)) {
         const parent = getParent(object);
-        const propertyName = getKey(object);
+        const propertyKey = getKey(object);
         const propertyInfo = findPropertyByNameInClassInfo(
             getClassInfo(parent),
-            propertyName
+            propertyKey
         );
-        label = `${
-            propertyInfo
-                ? getObjectPropertyDisplayName(parent, propertyInfo)
-                : humanize(propertyName)
-        }: ${getProperty(parent, propertyName)}`;
+
+        let propertyName;
+
+        if (propertyInfo) {
+            propertyName = getObjectPropertyDisplayName(parent, propertyInfo);
+        } else {
+            const classInfo = getClassInfo(parent);
+            if (classInfo.getPropertyDisplayName) {
+                propertyName = classInfo.getPropertyDisplayName(
+                    parent,
+                    propertyKey
+                );
+            }
+        }
+
+        if (!propertyName) {
+            propertyName = humanize(propertyKey);
+        }
+
+        label = `${propertyName}: ${getProperty(parent, propertyKey)}`;
     } else if (isArray(object)) {
         let propertyInfo = findPropertyByNameInObject(
             getParent(object),
@@ -293,27 +310,18 @@ export function getChildren(parent: IEezObject): IEezObject[] {
     }
 }
 
-export function getClass(object: IEezObject) {
-    if (isArray(object)) {
-        return getPropertyInfo(object).typeClass!;
-    } else {
-        return object.constructor as EezClass;
-    }
-}
-
-export function getClassInfo(object: IEezObject): ClassInfo {
-    return getClass(object).classInfo;
-}
-
 export function getObjectIcon(object: IEezObject) {
     const classInfo = getClassInfo(object);
 
-    if (classInfo.icon) {
-        return classInfo.icon;
+    if (classInfo.getIcon) {
+        const icon = classInfo.getIcon(object);
+        if (icon) {
+            return icon;
+        }
     }
 
-    if (classInfo.getIcon) {
-        return classInfo.getIcon(object);
+    if (classInfo.icon) {
+        return classInfo.icon;
     }
 
     return undefined;
@@ -349,14 +357,6 @@ export function getLabel(object: IEezObject): string {
     }
 
     return getClass(object).name;
-}
-
-export function getPropertiesPanelLabel(object: IEezObject) {
-    const classInfo = getClassInfo(object);
-    if (classInfo.propertiesPanelLabel) {
-        return classInfo.propertiesPanelLabel(object);
-    }
-    return getLabel(object);
 }
 
 export function getListLabel(object: IEezObject, collapsed: boolean) {
@@ -542,7 +542,7 @@ export function getCommonProperties(
                 propertyInfo.type !== PropertyType.Array &&
                 !(
                     propertyInfo.type === PropertyType.String &&
-                    propertyInfo.unique === true
+                    (propertyInfo.unique || propertyInfo.uniqueIdentifier)
                 )
         );
 
@@ -667,13 +667,6 @@ export function extendContextMenu(
     }
 }
 
-export function canAdd(object: IEezObject) {
-    return (
-        (isArrayElement(object) || isArray(object)) &&
-        getClassInfo(object).newItem != undefined
-    );
-}
-
 export function canDuplicate(object: IEezObject) {
     return isArrayElement(object);
 }
@@ -732,6 +725,37 @@ export function canPaste(projectStore: ProjectStore, object: IEezObject) {
 
 ////////////////////////////////////////////////////////////////////////////////
 
+export function canAdd(object: IEezObject) {
+    return (
+        (isArrayElement(object) || isArray(object)) &&
+        getClassInfo(object).newItem != undefined
+    );
+}
+
+export function getAddItemName(object: IEezObject) {
+    const parent = isArray(object) ? object : getParent(object);
+    if (!parent) {
+        return null;
+    }
+
+    const project = getProject(parent);
+    if (parent == project.userWidgets) {
+        return "User Widget";
+    }
+    if (parent == project.actions) {
+        return "User Action";
+    }
+    if (getParent(parent) == project.lvglStyles) {
+        return "Style";
+    }
+
+    if (getParent(parent) == project.lvglGroups) {
+        return "Group";
+    }
+
+    return humanize(getClass(parent).name);
+}
+
 export async function addItem(object: IEezObject) {
     const parent = isArray(object) ? object : getParent(object);
     if (!parent) {
@@ -760,7 +784,13 @@ export async function addItem(object: IEezObject) {
         return null;
     }
 
-    return getProjectStore(object).addObject(parent, newObject);
+    newObject = getProjectStore(object).addObject(parent, newObject);
+
+    if (newObject) {
+        ProjectEditor.navigateTo(newObject);
+    }
+
+    return newObject;
 }
 
 export function pasteItem(object: IEezObject) {
@@ -851,12 +881,14 @@ export function cutItem(object: EezObject) {
     let clipboardText = objectToClipboardData(getProjectStore(object), object);
 
     deleteItems([object], () => {
-        copyToClipboard(clipboardText);
+        copyProjectEditorDataToClipboard(clipboardText);
     });
 }
 
 export function copyItem(object: EezObject) {
-    copyToClipboard(objectToClipboardData(getProjectStore(object), object));
+    copyProjectEditorDataToClipboard(
+        objectToClipboardData(getProjectStore(object), object)
+    );
 }
 
 export interface IContextMenuContext {

@@ -1,13 +1,12 @@
 import { ipcRenderer } from "electron";
 
-import { dialog } from "@electron/remote";
+import { dialog, getCurrentWindow } from "@electron/remote";
 import React from "react";
 import { observable, action, keys, makeObservable } from "mobx";
 import { observer } from "mobx-react";
 import * as FlexLayout from "flexlayout-react";
 
 import { readBinaryFile } from "eez-studio-shared/util-electron";
-import { beginTransaction, commitTransaction } from "eez-studio-shared/store";
 
 import { IconAction, ButtonAction } from "eez-studio-ui/action";
 import { Toolbar } from "eez-studio-ui/toolbar";
@@ -40,6 +39,10 @@ import { SessionList } from "instrument/window/history/session/list-view";
 import { Scrapbook } from "instrument/window/history/scrapbook";
 
 import { showAddNoteDialog } from "instrument/window/note-dialog";
+import {
+    showAddAudioDialog,
+    showAddVideoDialog
+} from "instrument/window/media-dialogs";
 
 import {
     detectFileType,
@@ -49,7 +52,9 @@ import { Loader } from "eez-studio-ui/loader";
 import { WaveformFormat } from "eez-studio-ui/chart/WaveformFormat";
 import {
     CONVERT_TO_CHART,
-    PLOTTER_ICON
+    PLOTTER_ICON,
+    RECORD_AUDIO_ICON,
+    RECORD_VIDEO_ICON
 } from "project-editor/ui-components/icons";
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -58,24 +63,62 @@ export const HistoryTools = observer(
     class HistoryTools extends React.Component<{ appStore: IAppStore }, {}> {
         addNote = () => {
             showAddNoteDialog(note => {
-                beginTransaction("Add note");
+                const selectedItems = this.props.appStore.history.items.filter(
+                    item => item.selected
+                );
+
                 log(
                     this.props.appStore.history.options.store,
                     {
                         oid: this.props.appStore.history.oid,
                         type: "activity-log/note",
-                        message: note
+                        message: note,
+                        date:
+                            selectedItems.length == 1
+                                ? selectedItems[0].date
+                                : undefined
                     },
                     {
-                        undoable: true
+                        undoable: true,
+                        transaction: "Add note"
                     }
                 );
-                commitTransaction();
+            });
+        };
+
+        logMedia = (
+            media: { message: string; data: any },
+            transaction: string
+        ) => {
+            log(
+                this.props.appStore.history.options.store,
+                {
+                    oid: this.props.appStore.history.oid,
+                    type: "activity-log/media",
+                    message: media.message,
+                    data: media.data
+                },
+                {
+                    undoable: true,
+                    transaction
+                }
+            );
+        };
+
+        addAudio = () => {
+            showAddAudioDialog(media => {
+                this.logMedia(media, "Add audio");
+            });
+        };
+
+        addVideo = () => {
+            showAddVideoDialog(media => {
+                this.logMedia(media, "Add video");
             });
         };
 
         attachFile = async () => {
-            const result = await dialog.showOpenDialog({
+            const result = await dialog.showOpenDialog(getCurrentWindow(), {
                 properties: ["openFile", "multiSelections"],
                 filters: [{ name: "All Files", extensions: ["*"] }]
             });
@@ -255,7 +298,6 @@ export const HistoryTools = observer(
 
                         this.props.appStore.selectHistoryItems(undefined);
 
-                        beginTransaction("Add chart");
                         log(
                             this.props.appStore.history.options.store,
                             {
@@ -264,10 +306,10 @@ export const HistoryTools = observer(
                                 message: JSON.stringify(multiWaveformDefinition)
                             },
                             {
-                                undoable: true
+                                undoable: true,
+                                transaction: "Add chart"
                             }
                         );
-                        commitTransaction();
                     }
                 });
             }
@@ -299,7 +341,6 @@ export const HistoryTools = observer(
                 data.writeDoubleLE(value, i * 8);
             }
 
-            beginTransaction("Generate chart");
             log(
                 this.props.appStore.history.options.store,
                 {
@@ -323,10 +364,10 @@ export const HistoryTools = observer(
                     data
                 },
                 {
-                    undoable: true
+                    undoable: true,
+                    transaction: "Generate chart"
                 }
             );
-            commitTransaction();
         };
 
         render() {
@@ -341,6 +382,18 @@ export const HistoryTools = observer(
                         icon="material:comment"
                         title="Add Note"
                         onClick={this.addNote}
+                    />,
+                    <IconAction
+                        key="addAudio"
+                        icon={RECORD_AUDIO_ICON}
+                        title="Record Audio"
+                        onClick={this.addAudio}
+                    />,
+                    <IconAction
+                        key="addVideo"
+                        icon={RECORD_VIDEO_ICON}
+                        title="Record Video from Camera"
+                        onClick={this.addVideo}
                     />,
                     <IconAction
                         key="addFile"
@@ -560,10 +613,7 @@ export class HistoryViewComponent extends React.Component<{
                         display: "flex"
                     }}
                 >
-                    <SessionList
-                        appStore={appStore}
-                        history={appStore.history}
-                    />
+                    <SessionList appStore={appStore} />
                 </div>
             );
         } else if (component === "Scrapbook") {

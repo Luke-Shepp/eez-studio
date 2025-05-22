@@ -4,7 +4,6 @@ import {
     makeObservable,
     computed,
     runInAction,
-    IReactionDisposer,
     action
 } from "mobx";
 import classNames from "classnames";
@@ -45,7 +44,7 @@ import type {
     IFlowContext
 } from "project-editor/flow/flow-interfaces";
 
-import { FLOW_ITERATOR_INDEX_VARIABLE } from "project-editor/features/variable/defs";
+import { FLOW_ITERATOR_INDEXES_VARIABLE } from "project-editor/features/variable/defs";
 import {
     CHECKBOX_CHANGE_EVENT_STRUCT_NAME,
     RADIO_CHANGE_EVENT_STRUCT_NAME,
@@ -226,7 +225,8 @@ export class TextDashboardWidget extends Widget {
                 <span
                     className={classNames(
                         this.style.classNames,
-                        this.style.getConditionalClassNames(flowContext)
+                        this.style.getConditionalClassNames(flowContext),
+                        this.style.getDynamicCSSClassName(flowContext)
                     )}
                     onClick={this.onClick(flowContext)}
                     style={{ opacity: style.opacity }}
@@ -298,31 +298,82 @@ registerClass("RectangleDashboardWidget", RectangleDashboardWidget);
 
 ////////////////////////////////////////////////////////////////////////////////
 
-function TextInputWidgetInput({
-    value,
-    flowContext,
-    textInputWidget,
-    readOnly,
-    placeholder,
-    password
-}: {
-    value: string;
-    flowContext: IFlowContext;
-    textInputWidget: TextInputWidget;
-    readOnly: boolean;
-    placeholder: string;
-    password: boolean;
-}) {
-    const ref = React.useRef<HTMLInputElement>(null);
-    const [cursor, setCursor] = React.useState<number | null>(null);
+const TextInputWidgetInput = observer(
+    class TextInputWidgetInput extends React.Component<{
+        value: string;
+        flowContext: IFlowContext;
+        textInputWidget: TextInputWidget;
+        readOnly: boolean;
+        placeholder: string;
+        password: boolean;
+        iterators: number[];
+    }> {
+        inputElement = React.createRef<HTMLInputElement>();
+        latestFlowValue: any;
+        inputValue: any;
 
-    React.useEffect(() => {
-        const input = ref.current;
-        if (input) input.setSelectionRange(cursor, cursor);
-    }, [ref, cursor, value]);
+        constructor(props: any) {
+            super(props);
 
-    const handleKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
-        if (event.key === "Enter") {
+            makeObservable(this, {
+                inputValue: observable
+            });
+        }
+
+        handleKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
+            if (event.key === "Enter") {
+                const flowState = this.props.flowContext.flowState as FlowState;
+                if (flowState && flowState.runtime) {
+                    flowState.runtime.executeWidgetAction(
+                        this.props.flowContext,
+                        this.props.textInputWidget,
+                        "ON_CHANGE",
+                        makeTextInputChangeEventValue(
+                            this.props.flowContext,
+                            this.props.value
+                        ),
+                        `struct:${TEXT_INPUT_CHANGE_EVENT_STRUCT_NAME}`
+                    );
+                }
+            }
+        };
+
+        onChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+            const { flowContext, textInputWidget, iterators } = this.props;
+
+            runInAction(() => {
+                this.inputValue = event.target.value;
+            });
+
+            const flowState = flowContext.flowState as FlowState;
+            if (flowState) {
+                const value = this.inputValue;
+
+                if (this.props.textInputWidget.data) {
+                    assignProperty(
+                        flowState,
+                        textInputWidget,
+                        "data",
+                        value,
+                        iterators
+                    );
+                }
+
+                if (flowState.runtime) {
+                    flowState.runtime.executeWidgetAction(
+                        flowContext,
+                        textInputWidget,
+                        "ON_INPUT",
+                        makeTextInputChangeEventValue(flowContext, value),
+                        `struct:${TEXT_INPUT_CHANGE_EVENT_STRUCT_NAME}`
+                    );
+                }
+            }
+        };
+
+        onBlur = () => {
+            const { flowContext, textInputWidget, value } = this.props;
+
             const flowState = flowContext.flowState as FlowState;
             if (flowState && flowState.runtime) {
                 flowState.runtime.executeWidgetAction(
@@ -333,64 +384,42 @@ function TextInputWidgetInput({
                     `struct:${TEXT_INPUT_CHANGE_EVENT_STRUCT_NAME}`
                 );
             }
+        };
+
+        render() {
+            const { value, readOnly, placeholder, password } = this.props;
+
+            if (value != this.latestFlowValue) {
+                this.latestFlowValue = value;
+
+                setTimeout(
+                    action(() => {
+                        this.inputValue = undefined;
+                    })
+                );
+            }
+
+            return (
+                <>
+                    <input
+                        ref={this.inputElement}
+                        type={password ? "password" : "text"}
+                        value={
+                            this.inputValue != undefined
+                                ? this.inputValue
+                                : value
+                        }
+                        placeholder={placeholder}
+                        onChange={this.onChange}
+                        onBlur={this.onBlur}
+                        onKeyDown={this.handleKeyDown}
+                        readOnly={readOnly}
+                    ></input>
+                </>
+            );
         }
-    };
-
-    return (
-        <>
-            <input
-                ref={ref}
-                type={password ? "password" : "text"}
-                value={value}
-                placeholder={placeholder}
-                onChange={event => {
-                    const flowState = flowContext.flowState as FlowState;
-                    if (flowState) {
-                        setCursor(event.target.selectionStart);
-
-                        const value = event.target.value;
-
-                        if (textInputWidget.data) {
-                            assignProperty(
-                                flowState,
-                                textInputWidget,
-                                "data",
-                                value
-                            );
-                        }
-
-                        if (flowState.runtime) {
-                            flowState.runtime.executeWidgetAction(
-                                flowContext,
-                                textInputWidget,
-                                "ON_INPUT",
-                                makeTextInputChangeEventValue(
-                                    flowContext,
-                                    value
-                                ),
-                                `struct:${TEXT_INPUT_CHANGE_EVENT_STRUCT_NAME}`
-                            );
-                        }
-                    }
-                }}
-                onBlur={() => {
-                    const flowState = flowContext.flowState as FlowState;
-                    if (flowState && flowState.runtime) {
-                        flowState.runtime.executeWidgetAction(
-                            flowContext,
-                            textInputWidget,
-                            "ON_CHANGE",
-                            makeTextInputChangeEventValue(flowContext, value),
-                            `struct:${TEXT_INPUT_CHANGE_EVENT_STRUCT_NAME}`
-                        );
-                    }
-                }}
-                onKeyDown={handleKeyDown}
-                readOnly={readOnly}
-            ></input>
-        </>
-    );
-}
+    }
+);
 
 export class TextInputWidget extends Widget {
     static classInfo = makeDerivedClassInfo(Widget.classInfo, {
@@ -560,6 +589,9 @@ export class TextInputWidget extends Widget {
         let readOnly = this.getReadOnly(flowContext) ?? false;
         let placeholder = this.getPlaceholder(flowContext) ?? "";
 
+        const iterators =
+            flowContext.dataContext.get(FLOW_ITERATOR_INDEXES_VARIABLE) || [];
+
         return (
             <>
                 <TextInputWidgetInput
@@ -569,6 +601,7 @@ export class TextInputWidget extends Widget {
                     readOnly={readOnly}
                     placeholder={placeholder}
                     password={this.password}
+                    iterators={iterators}
                 />
                 {super.render(flowContext, width, height)}
             </>
@@ -580,6 +613,10 @@ registerClass("TextInputWidget", TextInputWidget);
 
 ////////////////////////////////////////////////////////////////////////////////
 
+class NumberInputDashboardExecutionState {
+    focus?: () => void;
+}
+
 const NumberInputDashboardWidgetElement = observer(
     class NumberInputDashboardWidgetElement extends React.Component<{
         className: string;
@@ -588,7 +625,12 @@ const NumberInputDashboardWidgetElement = observer(
         width: number;
         height: number;
         disableDefaultTabHandling: boolean;
+        iterators: number[];
     }> {
+        inputElement = React.createRef<HTMLInputElement>();
+        latestFlowValue: any;
+        inputValue: any;
+
         constructor(props: any) {
             super(props);
 
@@ -597,22 +639,26 @@ const NumberInputDashboardWidgetElement = observer(
             });
         }
 
-        inputElement = React.createRef<HTMLInputElement>();
-
         componentDidMount() {
             if (this.props.flowContext.flowState && this.inputElement.current) {
                 this.inputElement.current.focus();
             }
-        }
 
-        dispose: IReactionDisposer;
-        latestFlowValue: any;
-        inputValue: any;
+            let executionState =
+                this.props.flowContext.flowState?.getComponentExecutionState<NumberInputDashboardExecutionState>(
+                    this.props.component
+                );
+            if (executionState) {
+                executionState.focus = () => {
+                    this.inputElement.current?.focus();
+                };
+            }
+        }
 
         render() {
             const { flowContext, component } = this.props;
 
-            let value = evalProperty(flowContext, component, "value") ?? 25;
+            let value = evalProperty(flowContext, component, "value") ?? 0;
             let min = evalProperty(flowContext, component, "min") ?? 0;
             let max = evalProperty(flowContext, component, "max") ?? 100;
             let step = evalProperty(flowContext, component, "step") ?? 1;
@@ -658,7 +704,8 @@ const NumberInputDashboardWidgetElement = observer(
                                     flowState,
                                     component,
                                     "value",
-                                    value
+                                    value,
+                                    this.props.iterators
                                 );
                             }
 
@@ -746,7 +793,7 @@ export class NumberInputDashboardWidget extends Widget {
             left: 0,
             top: 0,
             width: 180,
-            height: 20,
+            height: 32,
             min: "0",
             max: "100",
             step: "1"
@@ -777,6 +824,18 @@ export class NumberInputDashboardWidget extends Widget {
                 code: 1,
                 paramExpressionType: `struct:${SLIDER_CHANGE_EVENT_STRUCT_NAME}`,
                 oldName: "action"
+            }
+        },
+
+        execute: (context: IDashboardComponentContext) => {
+            Widget.classInfo.execute!(context);
+
+            let executionState =
+                context.getComponentExecutionState<NumberInputDashboardExecutionState>();
+            if (!executionState) {
+                context.setComponentExecutionState<NumberInputDashboardExecutionState>(
+                    new NumberInputDashboardExecutionState()
+                );
             }
         }
     });
@@ -810,18 +869,24 @@ export class NumberInputDashboardWidget extends Widget {
     override render(flowContext: IFlowContext, width: number, height: number) {
         const style: React.CSSProperties = {};
         this.styleHook(style, flowContext);
+
+        const iterators =
+            flowContext.dataContext.get(FLOW_ITERATOR_INDEXES_VARIABLE) || [];
+
         return (
             <>
                 <NumberInputDashboardWidgetElement
                     className={classNames(
                         this.style.classNames,
-                        this.style.getConditionalClassNames(flowContext)
+                        this.style.getConditionalClassNames(flowContext),
+                        this.style.getDynamicCSSClassName(flowContext)
                     )}
                     component={this}
                     flowContext={flowContext}
                     width={width}
                     height={height}
                     disableDefaultTabHandling={this.disableDefaultTabHandling}
+                    iterators={iterators}
                 />
                 {super.render(flowContext, width, height)}
             </>
@@ -928,12 +993,9 @@ export class CheckboxWidget extends Widget {
     ): React.ReactNode {
         let checked = this.getChecked(flowContext);
 
-        let index;
-        if (flowContext.dataContext.has(FLOW_ITERATOR_INDEX_VARIABLE)) {
-            index = flowContext.dataContext.get(FLOW_ITERATOR_INDEX_VARIABLE);
-        } else {
-            index = 0;
-        }
+        const iterators =
+            flowContext.dataContext.get(FLOW_ITERATOR_INDEXES_VARIABLE) || [];
+        let index = iterators.length > 0 ? iterators[0] : 0;
 
         let id = "c-" + guid();
         if (index > 0) {
@@ -964,7 +1026,8 @@ export class CheckboxWidget extends Widget {
                     className={classNames(
                         "form-check",
                         this.style.classNames,
-                        this.style.getConditionalClassNames(flowContext)
+                        this.style.getConditionalClassNames(flowContext),
+                        this.style.getDynamicCSSClassName(flowContext)
                     )}
                     style={{ opacity: style.opacity }}
                 >
@@ -982,7 +1045,8 @@ export class CheckboxWidget extends Widget {
                                         flowState,
                                         this,
                                         "data",
-                                        value
+                                        value,
+                                        iterators
                                     );
                                 }
 
@@ -1124,12 +1188,9 @@ export class RadioWidget extends Widget {
             flowContext.flowState ? !this.enabled : true
         );
 
-        let index;
-        if (flowContext.dataContext.has(FLOW_ITERATOR_INDEX_VARIABLE)) {
-            index = flowContext.dataContext.get(FLOW_ITERATOR_INDEX_VARIABLE);
-        } else {
-            index = 0;
-        }
+        const iterators =
+            flowContext.dataContext.get(FLOW_ITERATOR_INDEXES_VARIABLE) || [];
+        let index = iterators.length > 0 ? iterators[0] : 0;
 
         let id = "CheckboxWidgetInput-" + getId(this);
         if (index > 0) {
@@ -1145,7 +1206,8 @@ export class RadioWidget extends Widget {
                     className={classNames(
                         "form-check",
                         this.style.classNames,
-                        this.style.getConditionalClassNames(flowContext)
+                        this.style.getConditionalClassNames(flowContext),
+                        this.style.getDynamicCSSClassName(flowContext)
                     )}
                     style={{ opacity: style.opacity }}
                 >
@@ -1160,7 +1222,8 @@ export class RadioWidget extends Widget {
                                     flowState,
                                     this,
                                     "variable",
-                                    value
+                                    value,
+                                    iterators
                                 );
 
                                 if (flowState.runtime) {
@@ -1281,13 +1344,17 @@ export class SwitchDashboardWidget extends Widget {
             flowContext.flowState ? !this.enabled : true
         );
 
+        const iterators =
+            flowContext.dataContext.get(FLOW_ITERATOR_INDEXES_VARIABLE) || [];
+
         return (
             <>
                 <div
                     className={classNames(
                         "form-check form-switch",
                         this.style.classNames,
-                        this.style.getConditionalClassNames(flowContext)
+                        this.style.getConditionalClassNames(flowContext),
+                        this.style.getDynamicCSSClassName(flowContext)
                     )}
                     style={{ opacity: style.opacity }}
                 >
@@ -1307,7 +1374,8 @@ export class SwitchDashboardWidget extends Widget {
                                         flowState,
                                         this,
                                         "data",
-                                        value
+                                        value,
+                                        iterators
                                     );
                                 }
 
@@ -1409,6 +1477,9 @@ export class DropDownListDashboardWidget extends Widget {
             flowContext.flowState ? !this.enabled : true
         );
 
+        const iterators =
+            flowContext.dataContext.get(FLOW_ITERATOR_INDEXES_VARIABLE) || [];
+
         return (
             <>
                 <select
@@ -1422,7 +1493,8 @@ export class DropDownListDashboardWidget extends Widget {
                                 flowContext.flowState as FlowState,
                                 this,
                                 "data",
-                                event.target.selectedIndex
+                                event.target.selectedIndex,
+                                iterators
                             );
 
                             flowContext.projectStore.runtime.executeWidgetAction(
@@ -1975,7 +2047,8 @@ export class ButtonDashboardWidget extends Widget {
                 <button
                     className={classNames(
                         buttonStyle.classNames,
-                        this.style.getConditionalClassNames(flowContext)
+                        this.style.getConditionalClassNames(flowContext),
+                        this.style.getDynamicCSSClassName(flowContext)
                     )}
                     style={{ opacity: style.opacity }}
                     disabled={!buttonEnabled}
@@ -2299,11 +2372,18 @@ const SliderDashboardWidgetElement = observer(
                 flowContext.flowState ? !component.enabled : true
             );
 
+            const iterators =
+                flowContext.dataContext.get(FLOW_ITERATOR_INDEXES_VARIABLE) ||
+                [];
+
             return (
                 <input
                     className={classNames(
                         this.props.component.style.classNames,
                         this.props.component.style.getConditionalClassNames(
+                            flowContext
+                        ),
+                        this.props.component.style.getDynamicCSSClassName(
                             flowContext
                         )
                     )}
@@ -2339,7 +2419,8 @@ const SliderDashboardWidgetElement = observer(
                                         flowState,
                                         component,
                                         "value",
-                                        this.currentValue
+                                        this.currentValue,
+                                        iterators
                                     );
 
                                     runInAction(() => {
@@ -2543,10 +2624,10 @@ import "project-editor/flow/components/widgets/dashboard/eez-chart";
 import "project-editor/flow/components/widgets/dashboard/markdown";
 import "project-editor/flow/components/widgets/dashboard/plotly";
 import "project-editor/flow/components/widgets/dashboard/tabulator";
-import "project-editor/flow/components/widgets/dashboard/data-tables";
 import "project-editor/flow/components/widgets/dashboard/terminal";
 import "project-editor/flow/components/widgets/dashboard/instrument-terminal";
 import "project-editor/flow/components/widgets/dashboard/embedded-dashboard";
 
 import { assignProperty } from "project-editor/flow/runtime/worker-dashboard-component-context";
 import { guid } from "eez-studio-shared/guid";
+import { IDashboardComponentContext } from "eez-studio-types";

@@ -19,6 +19,8 @@ export class UndoManager {
     private selectionBeforeFirstCommand: any;
     public combineCommands: boolean = false;
 
+    postponeSetCombineCommandsFalse: boolean = false;
+
     constructor(public projectStore: ProjectStore) {
         makeObservable(this, {
             undoStack: observable,
@@ -61,8 +63,16 @@ export class UndoManager {
     }
 
     setCombineCommands(value: boolean) {
+        if (value == false && this.postponeSetCombineCommandsFalse) {
+            return;
+        }
+
         this.pushToUndoStack();
         this.combineCommands = value;
+
+        if (!this.combineCommands) {
+            this.projectStore.updateLastRevisionStable();
+        }
     }
 
     executeCommand(command: ICommand) {

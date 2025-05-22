@@ -7,7 +7,8 @@
         "node_modules": true,
         "libs": false,
         "build": false,
-        "dist": true
+        "dist": true,
+        "resources/eez-framework-amalgamation": true
     },
     "typescript.reportStyleChecksAsWarnings": false,
     "typescript.suggest.autoImports": true,
@@ -93,10 +94,22 @@
         "mouse.h": "c",
         "parser_private.h": "c",
         "lv_assert.h": "c",
-        "lv_math.h": "c"
+        "lv_math.h": "c",
+        "stdbool.h": "c",
+        "regex": "cpp",
+        "bitset": "cpp",
+        "shared_mutex": "cpp",
+        "charconv": "c",
+        "compare": "c",
+        "format": "c",
+        "xlocbuf": "c",
+        "xloctime": "c",
+        "xmemory": "c",
+        "xtree": "c"
     },
     "typescript.tsdk": "node_modules\\typescript\\lib",
     "workbench.editor.enablePreview": false,
     "editor.formatOnSave": true,
-    "C_Cpp.formatting": "Disabled"
+    "C_Cpp.formatting": "disabled",
+    "cortex-debug.variableUseNaturalFormat": false
 }

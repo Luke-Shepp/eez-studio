@@ -68,6 +68,7 @@ import {
 import { generalGroup } from "project-editor/ui-components/PropertyGrid/groups";
 import type { ProjectEditorFeature } from "project-editor/store/features";
 import { getLvglDefaultFontBpp } from "project-editor/lvgl/lvgl-versions";
+import { settingsController } from "home/settings";
 
 ////////////////////////////////////////////////////////////////////////////////
 
@@ -453,7 +454,7 @@ export class Glyph extends EezObject {
         if (this.glyphBitmap) {
             const project = ProjectEditor.getProject(this);
 
-            ctx.fillStyle = "black";
+            ctx.fillStyle = settingsController.isDarkTheme ? "white" : "black";
             for (let y = 0; y < height; y++) {
                 for (let x = 0; x < width; x++) {
                     const pixelValue = getPixel(
@@ -938,6 +939,47 @@ registerClass("FontSource", FontSource);
 
 ////////////////////////////////////////////////////////////////////////////////
 
+const EmptySpacePropertyGridUI = observer(
+    class EmptySpacePropertyGridUI extends React.Component<PropertyProps> {
+        render() {
+            if (this.props.objects.length > 1) {
+                return null;
+            }
+
+            return <div style={{ marginTop: 10 }}></div>;
+        }
+    }
+);
+
+const EditGlyphsPropertyGridUI = observer(
+    class EditGlyphsPropertyGridUI extends React.Component<PropertyProps> {
+        render() {
+            if (this.props.objects.length > 1) {
+                return null;
+            }
+
+            return (
+                <div style={{ marginBottom: 10, display: "flex" }}>
+                    <div style={{ width: "33%" }}></div>
+                    <div style={{ width: "100%" }}>
+                        <Button
+                            color="primary"
+                            size="small"
+                            onClick={() =>
+                                onEditGlyphs(this.props.objects[0] as Font)
+                            }
+                        >
+                            Add or Remove Characters
+                        </Button>
+                    </div>
+                </div>
+            );
+        }
+    }
+);
+
+////////////////////////////////////////////////////////////////////////////////
+
 const ExportFontFilePropertyGridUI = observer(
     class ExportFontFilePropertyGridUI extends React.Component<PropertyProps> {
         export = async () => {
@@ -965,10 +1007,17 @@ const ExportFontFilePropertyGridUI = observer(
                 return null;
             }
             return (
-                <div style={{ marginTop: 10 }}>
-                    <Button color="primary" size="small" onClick={this.export}>
-                        Export Font File
-                    </Button>
+                <div style={{ marginBottom: 10, display: "flex" }}>
+                    <div style={{ width: "33%" }}></div>
+                    <div style={{ width: "100%" }}>
+                        <Button
+                            color="primary"
+                            size="small"
+                            onClick={this.export}
+                        >
+                            Export Font File
+                        </Button>
+                    </div>
                 </div>
             );
         }
@@ -1005,12 +1054,8 @@ const ChangeBitsPerPixel = observer(
                 let absoluteFilePath =
                     projectStore.getAbsoluteFilePath(relativeFilePath);
 
-                const encodingsBeforeDeduplication = getEncodings(
-                    font.lvglRanges
-                )!;
-
-                const { encodings, symbols } = removeDuplicates(
-                    encodingsBeforeDeduplication,
+                const { encodings, symbols } = getLvglEncodingsAndSymbols(
+                    font.lvglRanges,
                     font.lvglSymbols
                 );
 
@@ -1035,12 +1080,7 @@ const ChangeBitsPerPixel = observer(
 
                 projectStore.updateObject(font, {
                     bpp: result.values.bpp,
-                    lvglBinFile: fontProperties.lvglBinFile,
-                    lvglSourceFile: fontProperties.lvglSourceFile,
-                    lvglGlyphs: {
-                        encodings,
-                        symbols
-                    }
+                    lvglBinFile: fontProperties.lvglBinFile
                 });
 
                 font.loadLvglGlyphs(projectStore);
@@ -1071,14 +1111,17 @@ const ChangeBitsPerPixel = observer(
                 return null;
             }
             return (
-                <div style={{ marginTop: 10, marginBottom: 10 }}>
-                    <Button
-                        color="primary"
-                        size="small"
-                        onClick={this.onModify}
-                    >
-                        Change bits per pixel
-                    </Button>
+                <div style={{ marginBottom: 10, display: "flex" }}>
+                    <div style={{ width: "33%" }}></div>
+                    <div style={{ width: "100%" }}>
+                        <Button
+                            color="primary"
+                            size="small"
+                            onClick={this.onModify}
+                        >
+                            Change bits per pixel
+                        </Button>
+                    </div>
                 </div>
             );
         }
@@ -1103,12 +1146,10 @@ export class Font extends EezObject {
     screenOrientation: string;
     alwaysBuild: boolean;
 
-    lvglGlyphs: {
-        encodings: EncodingRange[];
-        symbols: string;
-    };
+    lvglRanges: string;
+    lvglSymbols: string;
     lvglBinFile?: string;
-    lvglSourceFile?: string;
+    lvglFallbackFont: string;
 
     constructor() {
         super();
@@ -1136,9 +1177,10 @@ export class Font extends EezObject {
             glyphs: observable,
             screenOrientation: observable,
             alwaysBuild: observable,
-            lvglGlyphs: observable,
+            lvglRanges: observable,
+            lvglSymbols: observable,
             lvglBinFile: observable,
-            lvglSourceFile: observable
+            lvglFallbackFont: observable
         });
     }
 
@@ -1203,7 +1245,7 @@ export class Font extends EezObject {
                 name: "changeBitsPerPixel",
                 type: PropertyType.Any,
                 computed: true,
-                propertyGridRowComponent: ChangeBitsPerPixel,
+                propertyGridFullRowComponent: ChangeBitsPerPixel,
                 skipSearch: true,
                 disabled: object => !isLVGLProject(object)
             },
@@ -1263,18 +1305,42 @@ export class Font extends EezObject {
                 hideInPropertyGrid: true
             },
             {
+                name: "emptySpace",
+                type: PropertyType.Any,
+                computed: true,
+                propertyGridFullRowComponent: EmptySpacePropertyGridUI,
+                skipSearch: true,
+                disabled: object => !isLVGLProject(object)
+            },
+            {
                 name: "lvglRanges",
                 displayName: "Ranges",
                 type: PropertyType.String,
-                computed: true,
+                readOnlyInPropertyGrid: true,
                 disabled: object => !isLVGLProject(object)
             },
             {
                 name: "lvglSymbols",
                 displayName: "Symbols",
                 type: PropertyType.String,
-                computed: true,
+                readOnlyInPropertyGrid: true,
                 disabled: object => !isLVGLProject(object)
+            },
+            {
+                name: "editGlyphs",
+                type: PropertyType.Any,
+                computed: true,
+                propertyGridFullRowComponent: EditGlyphsPropertyGridUI,
+                skipSearch: true,
+                disabled: object => !isLVGLProject(object)
+            },
+            {
+                name: "lvglFallbackFont",
+                displayName: "Fallback font",
+                type: PropertyType.String,
+                disabled: object => !isLVGLProject(object),
+                formText: object =>
+                    "E.g. lv_font_montserrat_24 or ui_font_my_custom_font"
             },
             {
                 name: "lvglBinFile",
@@ -1283,13 +1349,7 @@ export class Font extends EezObject {
                 skipSearch: true
             },
             {
-                name: "lvglSourceFile",
-                type: PropertyType.String,
-                hideInPropertyGrid: true,
-                skipSearch: true
-            },
-            {
-                name: "customUI",
+                name: "exportFontFile",
                 type: PropertyType.Any,
                 computed: true,
                 propertyGridRowComponent: ExportFontFilePropertyGridUI,
@@ -1302,11 +1362,53 @@ export class Font extends EezObject {
         propertiesPanelLabel: (font: Font) => {
             return `Font: ${font.name}`;
         },
-        beforeLoadHook: (font: Font, fontJs: Partial<Font>) => {
+        beforeLoadHook: (
+            font: Font,
+            fontJs: Partial<Font> & {
+                lvglSourceFile?: string;
+                lvglGlyphs?: {
+                    encodings: EncodingRange[];
+                    symbols: string;
+                };
+            }
+        ) => {
             if ((fontJs as any).renderEngine != undefined) {
                 fontJs.renderingEngine = (fontJs as any).renderEngine;
             } else if (fontJs.renderingEngine == undefined) {
                 fontJs.renderingEngine = "freetype";
+            }
+
+            if (
+                !fontJs.lvglRanges &&
+                !fontJs.lvglSymbols &&
+                fontJs.lvglGlyphs
+            ) {
+                function getLvglRanges() {
+                    const encodings = fontJs.lvglGlyphs!.encodings;
+                    if (encodings && encodings.length > 0) {
+                        return encodings
+                            .map(encoding =>
+                                encoding.from != encoding.to
+                                    ? `${encoding.from} - ${encoding.to}`
+                                    : `${encoding.from}`
+                            )
+                            .join(",");
+                    }
+
+                    return "";
+                }
+
+                function getLvglSymbols() {
+                    return fontJs.lvglGlyphs!.symbols ?? "";
+                }
+
+                fontJs.lvglRanges = getLvglRanges();
+                fontJs.lvglSymbols = getLvglSymbols();
+                delete fontJs.lvglGlyphs;
+            }
+
+            if (fontJs.lvglSourceFile) {
+                delete fontJs.lvglSourceFile;
             }
         },
         afterLoadHook: (font: Font, project) => {
@@ -1331,260 +1433,318 @@ export class Font extends EezObject {
 
             const projectStore = getProjectStore(parent);
 
+            let values = projectStore.projectTypeTraits.isLVGL
+                ? {
+                      size: 14,
+                      bpp: getLvglDefaultFontBpp(parent),
+                      ranges: "32-127",
+                      symbols: ""
+                  }
+                : {
+                      renderingEngine: "opentype",
+                      size: 14,
+                      bpp: 8,
+                      threshold: 128,
+                      fromGlyph: 32,
+                      toGlyph: 127,
+                      createGlyphs: true,
+                      createBlankGlyphs: false
+                  };
+
             try {
-                let result;
+                while (true) {
+                    let result;
 
-                if (projectStore.projectTypeTraits.isLVGL) {
-                    result = await showGenericDialog(projectStore, {
-                        dialogDefinition: {
-                            title: "New Font",
-                            fields: [
-                                {
-                                    name: "name",
-                                    type: "string",
-                                    validators: [
-                                        validators.required,
-                                        validators.invalidCharacters("."),
-                                        validators.unique(undefined, parent)
-                                    ]
-                                },
-                                {
-                                    name: "filePath",
-                                    displayName: "Font file",
-                                    type: AbsoluteFileInput,
-                                    validators: [validators.required],
-                                    options: {
-                                        filters: [
-                                            {
-                                                name: "Font files",
-                                                extensions: ["ttf", "otf"]
-                                            },
-                                            {
-                                                name: "All Files",
-                                                extensions: ["*"]
-                                            }
+                    let lvglRanges;
+                    let lvglSymbols;
+
+                    if (projectStore.projectTypeTraits.isLVGL) {
+                        result = await showGenericDialog(projectStore, {
+                            dialogDefinition: {
+                                title: "New Font",
+                                fields: [
+                                    {
+                                        name: "name",
+                                        type: "string",
+                                        validators: [
+                                            validators.required,
+                                            validators.invalidCharacters("."),
+                                            validators.unique(undefined, parent)
                                         ]
+                                    },
+                                    {
+                                        name: "filePath",
+                                        displayName: "Font file",
+                                        type: AbsoluteFileInput,
+                                        validators: [validators.required],
+                                        options: {
+                                            filters: [
+                                                {
+                                                    name: "Font files",
+                                                    extensions: ["ttf", "otf"]
+                                                },
+                                                {
+                                                    name: "All Files",
+                                                    extensions: ["*"]
+                                                }
+                                            ]
+                                        }
+                                    },
+                                    {
+                                        name: "bpp",
+                                        displayName: "Bits per pixel",
+                                        type: "enum",
+                                        enumItems: [1, 2, 4, 8]
+                                    },
+                                    {
+                                        name: "size",
+                                        displayName: "Font size (pixels)",
+                                        type: "number"
+                                    },
+                                    {
+                                        name: "ranges",
+                                        type: "string",
+                                        validators: [
+                                            validateRanges,
+                                            requiredRangesOrSymbols
+                                        ],
+                                        formText:
+                                            "Ranges and/or characters to include. Example: 32-127,140,160-170,200,210-255"
+                                    },
+                                    {
+                                        name: "symbols",
+                                        type: "string",
+                                        validators: [requiredRangesOrSymbols],
+                                        formText:
+                                            "List of characters to include. Example: abc01234äöüčćšđ"
                                     }
-                                },
-                                {
-                                    name: "bpp",
-                                    displayName: "Bits per pixel",
-                                    type: "enum",
-                                    enumItems: [1, 2, 4, 8]
-                                },
-                                {
-                                    name: "size",
-                                    displayName: "Font size (pixels)",
-                                    type: "number"
-                                },
-                                {
-                                    name: "ranges",
-                                    type: "string",
-                                    validators: [
-                                        validateRanges,
-                                        requiredRangesOrSymbols
-                                    ],
-                                    formText:
-                                        "Ranges and/or characters to include. Example: 32-127,140,160-170,200,210-255"
-                                },
-                                {
-                                    name: "symbols",
-                                    type: "string",
-                                    validators: [requiredRangesOrSymbols],
-                                    formText:
-                                        "List of characters to include. Example: abc01234äöüčćšđ"
-                                }
-                            ]
-                        },
-                        values: {
-                            size: 14,
-                            bpp: getLvglDefaultFontBpp(parent),
-                            ranges: "32-127",
-                            symbols: ""
-                        }
-                    });
+                                ]
+                            },
+                            values
+                        });
 
-                    result.values.renderingEngine = "LVGL";
-                    result.values.threshold = 128;
-                    result.values.createGlyphs = true;
-                    result.values.createBlankGlyphs = false;
-                    result.values.encodings = getEncodings(
-                        result.values.ranges
-                    );
-
-                    const { encodings, symbols } = removeDuplicates(
-                        result.values.encodings,
-                        result.values.symbols
-                    );
-                    result.values.encodings = encodings;
-                    result.values.symbols = symbols;
-                } else {
-                    result = await showGenericDialog(projectStore, {
-                        dialogDefinition: {
-                            title: "New Font",
-                            fields: [
-                                {
-                                    name: "name",
-                                    type: "string",
-                                    validators: [
-                                        validators.required,
-                                        validators.unique(undefined, parent)
-                                    ]
-                                },
-                                {
-                                    name: "filePath",
-                                    displayName: "Font file",
-                                    type: AbsoluteFileInput,
-                                    validators: [validators.required],
-                                    options: {
-                                        filters: [
-                                            {
-                                                name: "Font files",
-                                                extensions: ["ttf", "otf"]
-                                            },
-                                            {
-                                                name: "All Files",
-                                                extensions: ["*"]
-                                            }
-                                        ]
-                                    }
-                                },
-                                {
-                                    name: "renderingEngine",
-                                    displayName: "Rendering engine",
-                                    type: "enum",
-                                    enumItems: [
-                                        { id: "freetype", label: "FreeType" },
-                                        { id: "opentype", label: "OpenType" }
-                                    ]
-                                },
-                                {
-                                    name: "bpp",
-                                    displayName: "Bits per pixel",
-                                    type: "enum",
-                                    enumItems: [1, 8],
-                                    visible: () => isV1Project(parent)
-                                },
-                                {
-                                    name: "size",
-                                    displayName: "Font size (points)",
-                                    type: "number"
-                                },
-                                {
-                                    name: "threshold",
-                                    type: "number",
-                                    visible: is1BitPerPixel
-                                },
-                                {
-                                    name: "createGlyphs",
-                                    displayName: "Create characters",
-                                    type: "boolean",
-                                    checkboxStyleSwitch: true
-                                },
-                                {
-                                    name: "fromGlyph",
-                                    displayName: "From character",
-                                    type: "number",
-                                    visible: isCreateGlyphs
-                                },
-                                {
-                                    name: "toGlyph",
-                                    displayName: "To character",
-                                    type: "number",
-                                    visible: isCreateGlyphs
-                                },
-                                {
-                                    name: "createBlankGlyphs",
-                                    displayName: "Create blank characters",
-                                    type: "boolean",
-                                    visible: isCreateGlyphs,
-                                    checkboxStyleSwitch: true
-                                }
-                            ],
-                            className: "EezStudio_NewFontDialog"
-                        },
-                        values: {
-                            renderingEngine: "opentype",
-                            size: 14,
-                            bpp: 8,
-                            threshold: 128,
-                            fromGlyph: 32,
-                            toGlyph: 127,
-                            createGlyphs: true,
-                            createBlankGlyphs: false
-                        }
-                    });
-                }
-
-                try {
-                    let absoluteFilePath = result.values.filePath;
-                    let relativeFilePath = getProjectStore(
-                        parent
-                    ).getFilePathRelativeToProjectPath(result.values.filePath);
-
-                    const fontProperties = await extractFont({
-                        name: result.values.name,
-                        absoluteFilePath,
-                        relativeFilePath,
-                        renderingEngine: result.values.renderingEngine,
-                        bpp: result.values.bpp,
-                        size: result.values.size,
-                        threshold: result.values.threshold,
-                        createGlyphs: result.values.createGlyphs,
-                        encodings: result.values.createGlyphs
-                            ? result.values.encodings
-                                ? result.values.encodings
-                                : [
-                                      {
-                                          from: result.values.fromGlyph,
-                                          to: result.values.toGlyph
-                                      }
-                                  ]
-                            : [],
-                        symbols: result.values.symbols,
-                        createBlankGlyphs: result.values.createBlankGlyphs,
-                        doNotAddGlyphIfNotFound: false,
-                        lvglVersion:
-                            projectStore.project.settings.general.lvglVersion,
-                        lvglInclude:
-                            projectStore.project.settings.build.lvglInclude
-                    });
-
-                    const font = createObject<Font>(
-                        projectStore,
-                        fontProperties as any,
-                        Font
-                    );
-
-                    notification.info(`Added ${result.values.name} font.`);
-
-                    return font;
-                } catch (err) {
-                    let errorMessage;
-                    if (err) {
-                        if (err.message) {
-                            errorMessage = err.message;
-                        } else {
-                            errorMessage = err.toString();
-                        }
-                    }
-
-                    if (errorMessage) {
-                        notification.error(
-                            `Adding ${Font.name} failed: ${errorMessage}!`
+                        result.values.renderingEngine = "LVGL";
+                        result.values.threshold = 128;
+                        result.values.createGlyphs = true;
+                        result.values.createBlankGlyphs = false;
+                        result.values.encodings = getEncodings(
+                            result.values.ranges
                         );
+
+                        lvglRanges = result.values.ranges;
+                        lvglSymbols = result.values.symbols;
+
+                        const { encodings, symbols } =
+                            getLvglEncodingsAndSymbols(lvglRanges, lvglSymbols);
+                        result.values.encodings = encodings;
+                        result.values.symbols = symbols;
                     } else {
-                        notification.error(`Adding ${Font.name} failed!`);
+                        result = await showGenericDialog(projectStore, {
+                            dialogDefinition: {
+                                title: "New Font",
+                                fields: [
+                                    {
+                                        name: "name",
+                                        type: "string",
+                                        validators: [
+                                            validators.required,
+                                            validators.unique(undefined, parent)
+                                        ]
+                                    },
+                                    {
+                                        name: "filePath",
+                                        displayName: "Font file",
+                                        type: AbsoluteFileInput,
+                                        validators: [validators.required],
+                                        options: {
+                                            filters: [
+                                                {
+                                                    name: "Font files",
+                                                    extensions: ["ttf", "otf"]
+                                                },
+                                                {
+                                                    name: "All Files",
+                                                    extensions: ["*"]
+                                                }
+                                            ]
+                                        }
+                                    },
+                                    {
+                                        name: "renderingEngine",
+                                        displayName: "Rendering engine",
+                                        type: "enum",
+                                        enumItems: [
+                                            {
+                                                id: "freetype",
+                                                label: "FreeType"
+                                            },
+                                            {
+                                                id: "opentype",
+                                                label: "OpenType"
+                                            }
+                                        ]
+                                    },
+                                    {
+                                        name: "bpp",
+                                        displayName: "Bits per pixel",
+                                        type: "enum",
+                                        enumItems: [1, 8],
+                                        visible: () => isV1Project(parent)
+                                    },
+                                    {
+                                        name: "size",
+                                        displayName: "Font size (points)",
+                                        type: "number"
+                                    },
+                                    {
+                                        name: "threshold",
+                                        type: "number",
+                                        visible: is1BitPerPixel
+                                    },
+                                    {
+                                        name: "createGlyphs",
+                                        displayName: "Create characters",
+                                        type: "boolean",
+                                        checkboxStyleSwitch: true
+                                    },
+                                    {
+                                        name: "fromGlyph",
+                                        displayName: "From character",
+                                        type: "number",
+                                        visible: isCreateGlyphs
+                                    },
+                                    {
+                                        name: "toGlyph",
+                                        displayName: "To character",
+                                        type: "number",
+                                        visible: isCreateGlyphs
+                                    },
+                                    {
+                                        name: "createBlankGlyphs",
+                                        displayName: "Create blank characters",
+                                        type: "boolean",
+                                        visible: isCreateGlyphs,
+                                        checkboxStyleSwitch: true
+                                    }
+                                ],
+                                className: "EezStudio_NewFontDialog"
+                            },
+                            values
+                        });
                     }
 
-                    return undefined;
+                    values = result.values;
+
+                    try {
+                        let absoluteFilePath = result.values.filePath;
+                        let relativeFilePath = getProjectStore(
+                            parent
+                        ).getFilePathRelativeToProjectPath(
+                            result.values.filePath
+                        );
+
+                        const fontProperties = await extractFont({
+                            name: result.values.name,
+                            absoluteFilePath,
+                            relativeFilePath,
+                            renderingEngine: result.values.renderingEngine,
+                            bpp: result.values.bpp,
+                            size: result.values.size,
+                            threshold: result.values.threshold,
+                            createGlyphs: result.values.createGlyphs,
+                            encodings: projectStore.projectTypeTraits.isLVGL
+                                ? result.values.encodings
+                                : result.values.createGlyphs
+                                ? result.values.encodings
+                                    ? result.values.encodings
+                                    : [
+                                          {
+                                              from: result.values.fromGlyph,
+                                              to: result.values.toGlyph
+                                          }
+                                      ]
+                                : [],
+                            symbols: result.values.symbols,
+                            createBlankGlyphs: result.values.createBlankGlyphs,
+                            doNotAddGlyphIfNotFound: false,
+                            lvglVersion:
+                                projectStore.project.settings.general
+                                    .lvglVersion,
+                            lvglInclude:
+                                projectStore.project.settings.build.lvglInclude,
+                            getAllGlyphs: projectStore.projectTypeTraits.isLVGL
+                                ? true
+                                : undefined
+                        });
+
+                        if (projectStore.projectTypeTraits.isLVGL) {
+                            (fontProperties as Font).lvglRanges = lvglRanges;
+                            (fontProperties as Font).lvglSymbols = lvglSymbols;
+                        }
+
+                        const font = createObject<Font>(
+                            projectStore,
+                            fontProperties as any,
+                            Font
+                        );
+
+                        notification.info(`Added ${result.values.name} font.`);
+
+                        return font;
+                    } catch (err) {
+                        let errorMessage;
+                        if (err) {
+                            if (err.message) {
+                                errorMessage = err.message;
+                            } else {
+                                errorMessage = err.toString();
+                            }
+                        }
+
+                        if (errorMessage) {
+                            notification.error(
+                                `Adding ${Font.name} failed: ${errorMessage}!`
+                            );
+                        } else {
+                            notification.error(`Adding ${Font.name} failed!`);
+                        }
+                    }
                 }
             } catch (err) {
                 // canceled
                 return undefined;
             }
         },
-        icon: "material:font_download"
+        icon: "material:font_download",
+
+        updateObjectValueHook: (font: Font, values: Partial<Font>) => {
+            const projectStore = getProjectStore(font);
+            if (
+                projectStore.projectTypeTraits.isLVGL &&
+                values.name != undefined &&
+                font.name != values.name
+            ) {
+                projectStore.undoManager.postponeSetCombineCommandsFalse = true;
+
+                setTimeout(async () => {
+                    projectStore.undoManager.postponeSetCombineCommandsFalse =
+                        false;
+
+                    try {
+                        await font.rebuildLvglFont(
+                            projectStore,
+                            projectStore.project.settings.general.lvglVersion,
+                            projectStore.project.settings.build.lvglInclude,
+                            values.name
+                        );
+                    } catch (err) {
+                        console.error(err);
+                    }
+
+                    projectStore.undoManager.setCombineCommands(false);
+                });
+            }
+        }
     };
 
     get glyphsMap() {
@@ -1602,9 +1762,18 @@ export class Font extends EezObject {
     }
 
     async loadLvglGlyphs(projectStore: ProjectStore) {
-        if (!this.lvglGlyphs) {
+        if (
+            (!this.lvglRanges && !this.lvglSymbols) ||
+            !ProjectEditor.getProjectStore(this)
+        ) {
             return;
         }
+
+        const { encodings, symbols } = getLvglEncodingsAndSymbols(
+            this.lvglRanges,
+            this.lvglSymbols
+        );
+
         const fontProperties = await extractFont({
             name: this.name,
             absoluteFilePath: projectStore.getAbsoluteFilePath(
@@ -1617,8 +1786,8 @@ export class Font extends EezObject {
             size: this.source!.size!,
             threshold: this.threshold,
             createGlyphs: true,
-            encodings: this.lvglGlyphs.encodings,
-            symbols: this.lvglGlyphs.symbols,
+            encodings,
+            symbols,
             createBlankGlyphs: false,
             doNotAddGlyphIfNotFound: false,
             getAllGlyphs: true
@@ -1639,13 +1808,18 @@ export class Font extends EezObject {
     }
 
     async migrateLvglFont(projectStore: ProjectStore) {
-        if (!this.lvglGlyphs) {
+        if (!this.lvglRanges && !this.lvglSymbols) {
             return;
         }
 
         if (this.embeddedFontFile) {
             return;
         }
+
+        const { encodings, symbols } = getLvglEncodingsAndSymbols(
+            this.lvglRanges,
+            this.lvglSymbols
+        );
 
         // migrate from assets folder to the embedded asset
 
@@ -1662,8 +1836,8 @@ export class Font extends EezObject {
             size: this.source!.size!,
             threshold: this.threshold,
             createGlyphs: true,
-            encodings: this.lvglGlyphs.encodings,
-            symbols: this.lvglGlyphs.symbols,
+            encodings,
+            symbols,
             createBlankGlyphs: false,
             doNotAddGlyphIfNotFound: false,
             getAllGlyphs: true
@@ -1673,7 +1847,6 @@ export class Font extends EezObject {
             this.source!.filePath = path.basename(absoluteFilePath);
             this.embeddedFontFile = fontProperties.embeddedFontFile;
             this.lvglBinFile = fontProperties.lvglBinFile;
-            this.lvglSourceFile = fontProperties.lvglSourceFile;
             projectStore.setModified(Symbol());
         });
     }
@@ -1681,12 +1854,79 @@ export class Font extends EezObject {
     async rebuildLvglFont(
         projectStore: ProjectStore,
         lvglVersion: string,
-        lvglInclude: string
+        lvglInclude: string,
+        name?: string
     ) {
         if (!this.embeddedFontFile) {
             return;
         }
 
+        const { encodings, symbols } = getLvglEncodingsAndSymbols(
+            this.lvglRanges,
+            this.lvglSymbols
+        );
+
+        const fontProperties = await extractFont({
+            name: name || this.name,
+            absoluteFilePath: projectStore.getAbsoluteFilePath(
+                this.source!.filePath
+            ),
+            embeddedFontFile: this.embeddedFontFile,
+            relativeFilePath: this.source!.filePath,
+            renderingEngine: this.renderingEngine,
+            bpp: this.bpp,
+            size: this.source!.size!,
+            threshold: this.threshold,
+            createGlyphs: true,
+            encodings,
+            symbols,
+            createBlankGlyphs: false,
+            doNotAddGlyphIfNotFound: false,
+            getAllGlyphs: true,
+            lvglVersion,
+            lvglInclude
+        });
+
+        projectStore.updateObject(this, {
+            lvglBinFile: fontProperties.lvglBinFile
+        });
+    }
+
+    async getLvglSourceFile() {
+        if (!this.embeddedFontFile) {
+            return undefined;
+        }
+
+        const projectStore = ProjectEditor.getProjectStore(this);
+
+        const { encodings, symbols } = getLvglEncodingsAndSymbols(
+            this.lvglRanges,
+            this.lvglSymbols
+        );
+
+        let opts_string = "";
+
+        //
+        opts_string += `--bpp ${this.bpp} --size ${this.source!
+            .size!} --no-compress --font ${this.source!.filePath}`;
+
+        const lvglSymbols = this.lvglSymbols.replace(/\s/g, "");
+        if (lvglSymbols) {
+            opts_string += ` --symbols ${lvglSymbols}`;
+        }
+
+        const lvglRanges = this.lvglRanges.replace(/\s/g, "");
+        if (lvglRanges) {
+            opts_string += ` --range ${lvglRanges}`;
+        }
+
+        if (this.lvglFallbackFont) {
+            opts_string += ` --lv-fallback ${this.lvglFallbackFont}`;
+        }
+
+        opts_string += " --format lvgl";
+
+        //
         const fontProperties = await extractFont({
             name: this.name,
             absoluteFilePath: projectStore.getAbsoluteFilePath(
@@ -1699,38 +1939,18 @@ export class Font extends EezObject {
             size: this.source!.size!,
             threshold: this.threshold,
             createGlyphs: true,
-            encodings: this.lvglGlyphs.encodings,
-            symbols: this.lvglGlyphs.symbols,
+            encodings,
+            symbols,
             createBlankGlyphs: false,
             doNotAddGlyphIfNotFound: false,
             getAllGlyphs: true,
-            lvglVersion,
-            lvglInclude
+            lvglVersion: projectStore.project.settings.general.lvglVersion,
+            lvglInclude: projectStore.project.settings.build.lvglInclude,
+            opts_string,
+            lv_fallback: this.lvglFallbackFont
         });
 
-        projectStore.updateObject(this, {
-            lvglBinFile: fontProperties.lvglBinFile,
-            lvglSourceFile: fontProperties.lvglSourceFile
-        });
-    }
-
-    get lvglRanges() {
-        const encodings = this.lvglGlyphs?.encodings;
-        if (encodings && encodings.length > 0) {
-            return encodings
-                .map(encoding =>
-                    encoding.from != encoding.to
-                        ? `${encoding.from} - ${encoding.to}`
-                        : `${encoding.from}`
-                )
-                .join(",");
-        }
-
-        return "";
-    }
-
-    get lvglSymbols() {
-        return this.lvglGlyphs?.symbols ?? "";
+        return fontProperties.lvglSourceFile;
     }
 }
 
@@ -1746,7 +1966,17 @@ export function getEncodings(ranges: string): EncodingRange[] | undefined {
         let rangeArr = ranges.split(",");
 
         for (let i = 0; i < rangeArr.length; i++) {
-            let parts = rangeArr[i].split("-");
+            let parts2 = rangeArr[i].split("=>");
+
+            let mapped_from: number | undefined;
+            if (parts2.length == 2) {
+                mapped_from = parseInt(parts2[1]);
+                if (isNaN(mapped_from) || mapped_from < 0) {
+                    return undefined;
+                }
+            }
+
+            let parts = parts2[0].split("-");
             if (parts.length < 1 || parts.length > 2) {
                 return undefined;
             }
@@ -1761,9 +1991,9 @@ export function getEncodings(ranges: string): EncodingRange[] | undefined {
                 if (isNaN(to) || to < 0 || to < from) {
                     return undefined;
                 }
-                encodings.push({ from, to });
+                encodings.push({ from, to, mapped_from });
             } else {
-                encodings.push({ from, to: from });
+                encodings.push({ from, to: from, mapped_from });
             }
         }
     }
@@ -1846,6 +2076,14 @@ export function removeDuplicates(encodings: EncodingRange[], symbols: string) {
     return { encodings, symbols: symbolsDeduplicated };
 }
 
+export function getLvglEncodingsAndSymbols(
+    lvglRanges: string,
+    lvglSymbols: string
+) {
+    const encodingsBeforeDeduplication = getEncodings(lvglRanges)!;
+    return removeDuplicates(encodingsBeforeDeduplication, lvglSymbols);
+}
+
 ////////////////////////////////////////////////////////////////////////////////
 
 export function rebuildLvglFonts(
@@ -1856,6 +2094,94 @@ export function rebuildLvglFonts(
     projectStore.project.fonts.forEach(font => {
         font.rebuildLvglFont(projectStore, lvglVersion, lvglInclude);
     });
+}
+
+////////////////////////////////////////////////////////////////////////////////
+
+export async function onEditGlyphs(font: Font) {
+    const projectStore = ProjectEditor.getProjectStore(font);
+
+    const result = await showGenericDialog(projectStore, {
+        dialogDefinition: {
+            title: "Add or Remove Characters",
+            fields: [
+                {
+                    name: "ranges",
+                    type: "string",
+                    validators: [validateRanges, requiredRangesOrSymbols],
+                    formText:
+                        "Ranges and/or characters to include. Example: 32-127,140,160-170,200,210-255"
+                },
+                {
+                    name: "symbols",
+                    type: "string",
+                    validators: [requiredRangesOrSymbols],
+                    formText:
+                        "List of characters to include. Example: abc01234äöüčćšđ"
+                }
+            ]
+        },
+        values: {
+            ranges: font.lvglRanges,
+            symbols: font.lvglSymbols
+        }
+    });
+
+    try {
+        let relativeFilePath = font.source!.filePath;
+        let absoluteFilePath =
+            projectStore.getAbsoluteFilePath(relativeFilePath);
+
+        const { encodings, symbols } = getLvglEncodingsAndSymbols(
+            result.values.ranges,
+            result.values.symbols
+        );
+
+        const fontProperties = await extractFont({
+            name: font.name,
+            absoluteFilePath,
+            embeddedFontFile: font.embeddedFontFile,
+            relativeFilePath,
+            renderingEngine: "LVGL",
+            bpp: font.bpp,
+            size: font.source!.size!,
+            threshold: 128,
+            createGlyphs: true,
+            encodings,
+            symbols,
+            createBlankGlyphs: false,
+            doNotAddGlyphIfNotFound: false,
+            lvglVersion: projectStore.project.settings.general.lvglVersion,
+            lvglInclude: projectStore.project.settings.build.lvglInclude
+        });
+
+        projectStore.updateObject(font, {
+            lvglBinFile: fontProperties.lvglBinFile,
+            lvglRanges: result.values.ranges,
+            lvglSymbols: result.values.symbols
+        });
+
+        font.loadLvglGlyphs(projectStore);
+
+        notification.info(`Font ${font.name} successfully modified.`);
+    } catch (err) {
+        let errorMessage;
+        if (err) {
+            if (err.message) {
+                errorMessage = err.message;
+            } else {
+                errorMessage = err.toString();
+            }
+        }
+
+        if (errorMessage) {
+            notification.error(
+                `Modifying ${font.name} failed: ${errorMessage}!`
+            );
+        } else {
+            notification.error(`Modifying ${font.name} failed!`);
+        }
+    }
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -1886,7 +2212,7 @@ const feature: ProjectEditorFeature = {
     },
     toJsHook: (jsObject: Project, project: Project) => {
         jsObject.fonts?.forEach(font => {
-            if (font.lvglGlyphs) {
+            if (font.lvglRanges || font.lvglSymbols) {
                 font.glyphs = [];
             } else {
                 font.glyphs.forEach(glyph => {

@@ -12,7 +12,8 @@ import {
     PropertyInfo,
     getParent,
     getKey,
-    EezObject
+    EezObject,
+    LVGLParts
 } from "project-editor/core/object";
 
 import {
@@ -23,12 +24,10 @@ import {
     humanizePropertyName
 } from "project-editor/store/helper";
 
-import { IPanel } from "project-editor/store/navigation";
 import { ProjectStore, getLabel } from "project-editor/store";
 import { ProjectEditor } from "project-editor/project-editor-interface";
 
 import type { LVGLStylesDefinition } from "project-editor/lvgl/style-definition";
-import type { LVGLParts } from "project-editor/lvgl/style-helper";
 
 import { isArray } from "eez-studio-shared/util";
 import {
@@ -53,7 +52,8 @@ export class Message implements IMessage {
         public type: MessageType,
         public text: string,
         public object?: IEezObject,
-        public messages?: Message[]
+        public messages?: Message[],
+        public useGeneratedId?: boolean
     ) {
         makeObservable(this, {
             selected: observable,
@@ -62,6 +62,9 @@ export class Message implements IMessage {
     }
 
     get id() {
+        if (this.useGeneratedId) {
+            return this._id;
+        }
         return this.object ? getObjectPathAsString(this.object) : this._id;
     }
 }
@@ -358,7 +361,7 @@ export class MessagesCollection {
     }
 }
 
-export class OutputSection implements IPanel {
+export class OutputSection {
     permanent: boolean = true;
 
     loading = false;
@@ -456,22 +459,6 @@ export class OutputSection implements IPanel {
 
     get selectedObject(): IEezObject | undefined {
         return this.selectedMessage?.object;
-    }
-
-    cutSelection() {
-        // TODO
-    }
-
-    copySelection() {
-        // TODO
-    }
-
-    pasteSelection() {
-        // TODO
-    }
-
-    deleteSelection() {
-        // TODO
     }
 
     selectMessage(message: Message) {

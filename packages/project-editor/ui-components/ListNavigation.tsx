@@ -22,6 +22,7 @@ import {
 import {
     addItem,
     canAdd,
+    getAddItemName,
     IPanel,
     isPartOfNavigation
 } from "project-editor/store";
@@ -31,7 +32,6 @@ import { List } from "project-editor/ui-components/List";
 import { ProjectContext } from "project-editor/project/context";
 import classNames from "classnames";
 import { ProjectEditor } from "project-editor/project-editor-interface";
-import { DropFile } from "project-editor/ui-components/Tree";
 
 ////////////////////////////////////////////////////////////////////////////////
 
@@ -72,6 +72,7 @@ const AddButton = observer(
     class AddButton extends React.Component<{
         listAdapter: TreeAdapter;
         navigationObject: IEezObject | undefined;
+        onAdd: () => void;
     }> {
         static contextType = ProjectContext;
         declare context: React.ContextType<typeof ProjectContext>;
@@ -93,6 +94,8 @@ const AddButton = observer(
                             result.object,
                             result.subObject
                         );
+                    } else {
+                        this.props.onAdd();
                     }
                 }
             }
@@ -101,7 +104,11 @@ const AddButton = observer(
         render() {
             return (
                 <IconAction
-                    title="Add Item"
+                    title={`Add ${
+                        this.props.navigationObject
+                            ? getAddItemName(this.props.navigationObject)
+                            : "Item"
+                    }...`}
                     icon="material:add"
                     iconSize={16}
                     onClick={this.onAdd}
@@ -154,7 +161,8 @@ interface ListNavigationProps {
     dragAndDropManager?: DragAndDropManagerClass;
     searchInput?: boolean;
     editable?: boolean;
-    onFilesDrop?: (files: DropFile[]) => void;
+    onFilesDrop?: (files: File[]) => void;
+    doNotUsePropertyGrid?: boolean;
 }
 
 export const ListNavigation = observer(
@@ -169,6 +177,8 @@ export const ListNavigation = observer(
         searchText: string = "";
 
         dispose: IReactionDisposer;
+
+        divRef = React.createRef<HTMLDivElement>();
 
         constructor(props: ListNavigationProps) {
             super(props);
@@ -218,9 +228,7 @@ export const ListNavigation = observer(
         }
 
         componentDidMount() {
-            if (this.listAdapter.allRows.length > 0) {
-                this.context.navigationStore.setInitialSelectedPanel(this);
-            }
+            this.context.navigationStore.mountPanel(this);
         }
 
         componentDidUpdate() {
@@ -229,9 +237,7 @@ export const ListNavigation = observer(
 
         componentWillUnmount() {
             this.dispose();
-            if (this.context.navigationStore.selectedPanel === this) {
-                this.context.navigationStore.setSelectedPanel(undefined);
-            }
+            this.context.navigationStore.unmountPanel(this);
         }
 
         get listAdapter() {
@@ -291,18 +297,30 @@ export const ListNavigation = observer(
         get selectedObjects() {
             return this.listAdapter.rootItem.selectedObjects;
         }
+        canCut() {
+            return this.listAdapter.canCut();
+        }
         cutSelection() {
             if (this.editable) {
                 this.listAdapter.cutSelection();
             }
         }
+        canCopy() {
+            return this.listAdapter.canCopy();
+        }
         copySelection() {
             this.listAdapter.copySelection();
+        }
+        canPaste() {
+            return this.listAdapter.canPaste();
         }
         pasteSelection() {
             if (this.editable) {
                 this.listAdapter.pasteSelection();
             }
+        }
+        canDelete() {
+            return this.listAdapter.canDelete();
         }
         deleteSelection() {
             if (this.editable) {
@@ -314,11 +332,17 @@ export const ListNavigation = observer(
                 this.listAdapter.allRows.map(row => row.item)
             );
         }
-        onFocus() {
+        onFocus = () => {
             const navigationStore = this.context.navigationStore;
             if (isPartOfNavigation(this.props.navigationObject)) {
                 navigationStore.setSelectedPanel(this);
             }
+        };
+        doNotUsePropertyGrid() {
+            if (this.props.doNotUsePropertyGrid != undefined) {
+                return this.props.doNotUsePropertyGrid;
+            }
+            return false;
         }
 
         onSearchChange(event: any) {
@@ -340,6 +364,18 @@ export const ListNavigation = observer(
                         key="add"
                         listAdapter={this.listAdapter}
                         navigationObject={this.props.navigationObject}
+                        onAdd={() => {
+                            const treeElement:
+                                | HTMLDivElement
+                                | undefined
+                                | null =
+                                this.divRef.current?.querySelector(
+                                    ".EezStudio_Tree"
+                                );
+                            if (treeElement) {
+                                treeElement.focus();
+                            }
+                        }}
                     />
                 );
 
@@ -349,7 +385,10 @@ export const ListNavigation = observer(
             }
 
             return (
-                <div className="EezStudio_ProjectEditor_ListNavigation">
+                <div
+                    ref={this.divRef}
+                    className="EezStudio_ProjectEditor_ListNavigation"
+                >
                     <div className="EezStudio_Title">
                         <SortControl
                             direction={this.sortDirection}
@@ -374,7 +413,7 @@ export const ListNavigation = observer(
                     <List
                         listAdapter={this.listAdapter}
                         tabIndex={0}
-                        onFocus={this.onFocus.bind(this)}
+                        onFocus={this.onFocus}
                         onEditItem={this.editable ? onEditItem : undefined}
                         renderItem={renderItem}
                         onFilesDrop={this.props.onFilesDrop}

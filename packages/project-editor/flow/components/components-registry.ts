@@ -222,9 +222,22 @@ export function getComponentName(componentClassName: string) {
     return name;
 }
 
-export function getComponentVisualData(componentClass: IObjectClassInfo) {
+export function getComponentVisualData(
+    componentClass: IObjectClassInfo,
+    projectStore: ProjectStore | undefined
+) {
     const classInfo = componentClass.objectClass.classInfo;
-    let icon = classInfo.icon as any;
+
+    let icon;
+
+    if (classInfo.getIcon) {
+        icon = classInfo.getIcon(undefined, componentClass, projectStore);
+    }
+
+    if (icon == undefined) {
+        icon = classInfo.icon as any;
+    }
+
     let label = componentClass.displayName
         ? componentClass.displayName
         : classInfo.componentPaletteLabel ||
@@ -232,10 +245,21 @@ export function getComponentVisualData(componentClass: IObjectClassInfo) {
 
     let titleStyle: React.CSSProperties | undefined;
     if (classInfo.componentHeaderColor) {
+        let backgroundColor;
+        if (typeof classInfo.componentHeaderColor == "string") {
+            backgroundColor = classInfo.componentHeaderColor;
+        } else {
+            backgroundColor = classInfo.componentHeaderColor(
+                undefined,
+                componentClass,
+                projectStore
+            );
+        }
+
         titleStyle = {
-            backgroundColor: classInfo.componentHeaderColor,
+            backgroundColor,
             color: tinycolor
-                .mostReadable(classInfo.componentHeaderColor, ["#fff", "0x333"])
+                .mostReadable(backgroundColor, ["#fff", "0x333"])
                 .toHexString()
         };
     }

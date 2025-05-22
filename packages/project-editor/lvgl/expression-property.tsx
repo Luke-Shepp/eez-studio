@@ -5,7 +5,6 @@ import {
     EezObject,
     findPropertyByNameInClassInfo,
     FlowPropertyType,
-    getProperty,
     IEezObject,
     IOnSelectParams,
     PropertyInfo,
@@ -17,19 +16,12 @@ import { getClassInfo } from "project-editor/store";
 import { findBitmap } from "project-editor/project/project";
 import { Property } from "project-editor/ui-components/PropertyGrid/Property";
 import { expressionBuilder } from "project-editor/flow/expression/ExpressionBuilder";
-import {
-    LVGLRollerWidget,
-    type LVGLLabelWidget,
-    type LVGLWidget
-} from "project-editor/lvgl/widgets";
+import type { LVGLWidget } from "project-editor/lvgl/widgets";
 import { ProjectEditor } from "project-editor/project-editor-interface";
 import { getPropertyValue } from "project-editor/ui-components/PropertyGrid/utils";
 import { ValueType } from "eez-studio-types";
-import type { LVGLBuild } from "project-editor/lvgl/build";
-import { humanize } from "eez-studio-shared/string";
-import { getComponentName } from "project-editor/flow/components/components-registry";
 
-export type LVGLPropertyType = "literal" | "expression";
+export type LVGLPropertyType = "literal" | "translated-literal" | "expression";
 
 const LVGLProperty = observer(
     class LVGLProperty extends React.Component<PropertyProps> {
@@ -55,15 +47,16 @@ const LVGLProperty = observer(
             if (propertyInfo.dynamicType) {
                 propertyInfoType = propertyInfo.dynamicType(objects[0]);
             } else {
-                propertyInfoType =
-                    propertyInfo.expressionType == "integer"
-                        ? PropertyType.Number
-                        : propertyInfo.expressionType == "string" ||
-                          propertyInfo.expressionType == "array:string"
-                        ? PropertyType.MultilineText
-                        : propertyInfo.expressionType == "boolean"
-                        ? PropertyType.Boolean
-                        : propertyInfo.type;
+                propertyInfoType = propertyInfo.colorEditorForLiteral
+                    ? PropertyType.ThemedColor
+                    : propertyInfo.expressionType == "integer"
+                    ? PropertyType.Number
+                    : propertyInfo.expressionType == "string" ||
+                      propertyInfo.expressionType == "array:string"
+                    ? PropertyType.MultilineText
+                    : propertyInfo.expressionType == "boolean"
+                    ? PropertyType.Boolean
+                    : propertyInfo.type;
             }
 
             let referencedObjectCollectionPath =
@@ -116,7 +109,9 @@ const LVGLProperty = observer(
                         type == "expression" &&
                         this.context.projectTypeTraits.hasFlowSupport
                     );
-                }
+                },
+
+                formText: propertyInfo.formText
             } as Partial<PropertyInfo>);
 
             let bitmap;
@@ -136,12 +131,14 @@ const LVGLProperty = observer(
             return (
                 <>
                     <div className="EezStudio_LVGProperty">
-                        <Property
-                            propertyInfo={valuePropertyInfo}
-                            objects={objects}
-                            readOnly={readOnly}
-                            updateObject={updateObject}
-                        />
+                        <div style={{ flex: 1 }}>
+                            <Property
+                                propertyInfo={valuePropertyInfo}
+                                objects={objects}
+                                readOnly={readOnly}
+                                updateObject={updateObject}
+                            />
+                        </div>
 
                         <Property
                             propertyInfo={typePropertyInfo}
@@ -176,15 +173,27 @@ export function makeLvglExpressionProperty(
                 type: PropertyType.ObjectReference,
                 referencedObjectCollectionPath: "variables/globalVariables",
                 propertyGridColumnComponent: LVGLProperty,
-                flowProperty: (widget: LVGLLabelWidget | undefined) => {
+                flowProperty: (widget: LVGLWidget | undefined) => {
                     if (widget == undefined) {
                         return flowProperty;
                     }
+
                     return (widget as any)[name + "Type"] == "expression"
                         ? flowProperty
                         : undefined;
                 },
-                expressionType
+                isFlowPropertyBuildable: (widget: LVGLWidget) => {
+                    if (
+                        !getClassInfo(widget).properties.find(
+                            p => p.name == name + "Type"
+                        )
+                    ) {
+                        return true;
+                    }
+                    return (widget as any)[name + "Type"] == "expression";
+                },
+                expressionType,
+                disableSpellcheck: true
             } as PropertyInfo,
             props
         ),
@@ -210,193 +219,4 @@ export function makeLvglExpressionProperty(
             hideInPropertyGrid: true
         } as PropertyInfo
     ];
-}
-
-export function expressionPropertyBuildTickSpecific<T extends LVGLWidget>(
-    build: LVGLBuild,
-    widget: T,
-    propName: Extract<keyof T, string>,
-    getFunc: string,
-    setFunc: string,
-    setFuncOptArgs?: string
-) {
-    if (getProperty(widget, propName + "Type") == "expression") {
-        const propertyInfo = findPropertyByNameInClassInfo(
-            getClassInfo(widget),
-            propName
-        );
-        if (!propertyInfo) {
-            console.error("UNEXPECTED!");
-            return;
-        }
-
-        build.line(`{`);
-        build.indent();
-
-        if (build.assets.projectStore.projectTypeTraits.hasFlowSupport) {
-            let componentIndex = build.assets.getComponentIndex(widget);
-            const propertyIndex = build.assets.getComponentPropertyIndex(
-                widget,
-                propName
-            );
-
-            if (propertyInfo.expressionType == "string") {
-                build.line(
-                    `const char *new_val = evalTextProperty(flowState, ${componentIndex}, ${propertyIndex}, "Failed to evaluate ${humanize(
-                        propName
-                    )} in ${getComponentName(widget.type)} widget");`
-                );
-            } else if (propertyInfo.expressionType == "array:string") {
-                build.line(
-                    `const char *new_val = evalStringArrayPropertyAndJoin(flowState, ${componentIndex}, ${propertyIndex}, "Failed to evaluate ${humanize(
-                        propName
-                    )} in ${getComponentName(widget.type)} widget", "\\n");`
-                );
-            } else if (propertyInfo.expressionType == "integer") {
-                build.line(
-                    `int32_t new_val = evalIntegerProperty(flowState, ${componentIndex}, ${propertyIndex}, "Failed to evaluate ${humanize(
-                        propName
-                    )} in ${getComponentName(widget.type)} widget");`
-                );
-            } else {
-                console.error("UNEXPECTED!");
-                return;
-            }
-        } else {
-            if (propertyInfo.expressionType == "string") {
-                build.line(
-                    `const char *new_val = ${build.getVariableGetterFunctionName(
-                        (widget as any)[propName]
-                    )}();`
-                );
-            } else if (propertyInfo.expressionType == "integer") {
-                build.line(
-                    `int32_t new_val = ${build.getVariableGetterFunctionName(
-                        (widget as any)[propName]
-                    )}();`
-                );
-            } else {
-                console.error("UNEXPECTED!");
-                return;
-            }
-        }
-
-        if (
-            propertyInfo.expressionType == "string" ||
-            propertyInfo.expressionType == "array:string"
-        ) {
-            const objectAccessor = build.getLvglObjectAccessor(widget);
-
-            build.line(`const char *cur_val = ${getFunc}(${objectAccessor});`);
-
-            if (widget instanceof LVGLRollerWidget) {
-                build.line(
-                    `if (compareRollerOptions((lv_roller_t *)${objectAccessor}, new_val, cur_val, LV_ROLLER_MODE_${widget.mode}) != 0) {`
-                );
-            } else {
-                build.line("if (strcmp(new_val, cur_val) != 0) {");
-            }
-            build.indent();
-            build.line(`tick_value_change_obj = ${objectAccessor};`);
-            build.line(
-                `${setFunc}(${objectAccessor}, new_val${setFuncOptArgs ?? ""});`
-            );
-            build.line(`tick_value_change_obj = NULL;`);
-            build.unindent();
-            build.line("}");
-        } else if (propertyInfo.expressionType == "integer") {
-            const objectAccessor = build.getLvglObjectAccessor(widget);
-
-            build.line(`int32_t cur_val = ${getFunc}(${objectAccessor});`);
-
-            build.line("if (new_val != cur_val) {");
-            build.indent();
-            build.line(`tick_value_change_obj = ${objectAccessor};`);
-            build.line(
-                `${setFunc}(${objectAccessor}, new_val${setFuncOptArgs ?? ""});`
-            );
-            build.line(`tick_value_change_obj = NULL;`);
-            build.unindent();
-            build.line("}");
-        } else {
-            console.error("UNEXPECTED!");
-            return;
-        }
-
-        build.unindent();
-        build.line(`}`);
-    }
-}
-
-export function expressionPropertyBuildEventHandlerSpecific<
-    T extends LVGLWidget
->(
-    build: LVGLBuild,
-    widget: T,
-    propName: Extract<keyof T, string>,
-    getFunc: string
-) {
-    if (getProperty(widget, propName + "Type") == "expression") {
-        const propertyInfo = findPropertyByNameInClassInfo(
-            getClassInfo(widget),
-            propName
-        );
-        if (!propertyInfo) {
-            console.error("UNEXPECTED!");
-            return;
-        }
-
-        build.line("if (event == LV_EVENT_VALUE_CHANGED) {");
-        build.indent();
-
-        build.line(`lv_obj_t *ta = lv_event_get_target(e);`);
-        if (propertyInfo.expressionType == "integer") {
-            build.line(`int32_t value = ${getFunc}(ta);`);
-        } else if (propertyInfo.expressionType == "string") {
-            build.line(`const char *value = ${getFunc}(ta);`);
-        } else {
-            console.error("UNEXPECTED!");
-            return;
-        }
-
-        if (build.assets.projectStore.projectTypeTraits.hasFlowSupport) {
-            const componentIndex = build.assets.getComponentIndex(widget);
-            const propertyIndex = build.assets.getComponentPropertyIndex(
-                widget,
-                propName
-            );
-
-            build.line(`if (tick_value_change_obj != ta) {`);
-            build.indent();
-
-            if (propertyInfo.expressionType == "integer") {
-                build.line(
-                    `assignIntegerProperty(flowState, ${componentIndex}, ${propertyIndex}, value, "Failed to assign ${humanize(
-                        propName
-                    )} in ${getComponentName(widget.type)} widget");`
-                );
-            } else if (propertyInfo.expressionType == "string") {
-                build.line(
-                    `assignStringProperty(flowState, ${componentIndex}, ${propertyIndex}, value, "Failed to assign ${humanize(
-                        propName
-                    )} in ${getComponentName(widget.type)} widget");`
-                );
-            } else {
-                console.error("UNEXPECTED!");
-                return;
-            }
-
-            build.unindent();
-            build.line("}");
-        } else {
-            build.line(
-                `${build.getVariableSetterFunctionName(
-                    (widget as any)[propName]
-                )}(value);`
-            );
-        }
-
-        build.unindent();
-        build.line("}");
-    }
 }

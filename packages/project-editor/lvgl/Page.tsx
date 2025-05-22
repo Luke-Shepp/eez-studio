@@ -25,7 +25,6 @@ export const LVGLPage = observer(
         createPageRuntime() {
             if (this.context.runtime) {
                 this.runtime = new LVGLNonActivePageViewerRuntime(
-                    this.context,
                     this.props.page,
                     this.props.page.width,
                     this.props.page.height,
@@ -34,7 +33,8 @@ export const LVGLPage = observer(
             } else {
                 this.runtime = new LVGLPageEditorRuntime(
                     this.props.page,
-                    this.canvasRef.current!.getContext("2d")!
+                    this.canvasRef.current!.getContext("2d")!,
+                    this.props.flowContext
                 );
             }
 
@@ -64,44 +64,48 @@ export const LVGLPage = observer(
 
         render() {
             this.context.project.settings.general.lvglVersion;
+            this.context.project.settings.general.darkTheme;
 
             return (
-                <LVGLPageCanvasWithForwardedRef
+                <LVGLPageCanvas
                     ref={this.canvasRef}
                     width={this.props.page.width}
                     height={this.props.page.height}
                     flowContext={this.props.flowContext}
-                ></LVGLPageCanvasWithForwardedRef>
+                ></LVGLPageCanvas>
             );
         }
     }
 );
 
-interface LVGLPageCanvasProps {
-    forwardedRef: React.Ref<HTMLCanvasElement>;
-    width: number;
-    height: number;
-    flowContext: IFlowContext;
-}
-
 const LVGLPageCanvas = observer(
-    class LVGLPageCanvas extends React.Component<LVGLPageCanvasProps> {
-        render() {
+    React.forwardRef(
+        (
+            props: {
+                width: number;
+                height: number;
+                flowContext: IFlowContext;
+            },
+            ref: React.Ref<HTMLCanvasElement>
+        ) => {
             const style: React.CSSProperties = {
                 imageRendering:
-                    this.props.flowContext.viewState.transform.scale > 2
+                    props.flowContext.viewState.transform.scale > 2
                         ? "pixelated"
                         : "auto"
             };
 
             if (
-                this.props.flowContext.projectStore.project.settings.general
-                    .circularDisplay
+                props.flowContext.projectStore.project.settings.general
+                    .circularDisplay ||
+                props.flowContext.projectStore.project.settings.general
+                    .displayBorderRadius != 0
             ) {
-                style.borderRadius = Math.min(
-                    this.props.width,
-                    this.props.height
-                );
+                style.borderRadius = props.flowContext.projectStore.project
+                    .settings.general.circularDisplay
+                    ? Math.min(props.width, props.height)
+                    : props.flowContext.projectStore.project.settings.general
+                          .displayBorderRadius;
 
                 style.border = `1px solid ${
                     settingsController.isDarkTheme ? "#444" : "#eee"
@@ -111,21 +115,12 @@ const LVGLPageCanvas = observer(
 
             return (
                 <canvas
-                    ref={this.props.forwardedRef}
-                    width={this.props.width}
-                    height={this.props.height}
+                    ref={ref}
+                    width={props.width}
+                    height={props.height}
                     style={style}
                 ></canvas>
             );
         }
-    }
-);
-
-const LVGLPageCanvasWithForwardedRef = React.forwardRef(
-    (
-        props: Omit<LVGLPageCanvasProps, "forwardedRef">,
-        ref: React.Ref<HTMLCanvasElement>
-    ) => {
-        return <LVGLPageCanvas {...props} forwardedRef={ref} />;
-    }
+    )
 );

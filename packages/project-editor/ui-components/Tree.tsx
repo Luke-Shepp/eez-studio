@@ -1,4 +1,4 @@
-import React, { useRef, useEffect } from "react";
+import React from "react";
 import { observable, computed, action, makeObservable } from "mobx";
 import { observer } from "mobx-react";
 import classNames from "classnames";
@@ -12,6 +12,7 @@ import {
     DropPosition,
     TreeObjectAdapter
 } from "project-editor/core/objectAdapter";
+import { ProjectContext } from "project-editor/project/context";
 
 ////////////////////////////////////////////////////////////////////////////////
 
@@ -47,22 +48,7 @@ const DropMark = observer(
 ////////////////////////////////////////////////////////////////////////////////
 
 const TreeRow = observer(
-    ({
-        treeAdapter,
-        item,
-        level,
-        draggable,
-        onDragStart,
-        onDrag,
-        onDragEnd,
-        onClick,
-        onMouseUp,
-        onDoubleClick,
-        collapsable,
-        onToggleCollapse,
-        onEditItem,
-        renderItem
-    }: {
+    class TreeRow extends React.Component<{
         treeAdapter: TreeAdapter;
         item: TreeObjectAdapter;
         level: number;
@@ -77,103 +63,114 @@ const TreeRow = observer(
         onToggleCollapse: (event: any) => void;
         onEditItem?: (itemId: string) => void;
         renderItem?: (itemId: string) => React.ReactNode;
-    }) => {
-        const ref = useRef<HTMLDivElement>(null);
+    }> {
+        ref = React.createRef<HTMLDivElement>();
 
-        let ensureVisibleTimeout: any;
+        ensureVisibleTimeout: any;
 
-        useEffect(() => {
-            if (ensureVisibleTimeout) {
-                clearTimeout(ensureVisibleTimeout);
-            }
-
-            ensureVisibleTimeout = setTimeout(() => {
-                ensureVisibleTimeout = undefined;
+        componentDidMount() {
+            this.ensureVisibleTimeout = setTimeout(() => {
+                this.ensureVisibleTimeout = undefined;
 
                 if (
                     !(
-                        treeAdapter.draggableAdapter &&
-                        treeAdapter.draggableAdapter.isDragging
+                        this.props.treeAdapter.draggableAdapter &&
+                        this.props.treeAdapter.draggableAdapter.isDragging
                     )
                 ) {
-                    if (hasClass(ref.current, "selected")) {
-                        ref.current!.scrollIntoView({ block: "center" });
+                    if (hasClass(this.ref.current, "selected")) {
+                        this.ref.current!.scrollIntoView({ block: "center" });
                     }
                 }
             }, 100);
-        }, []);
-
-        let className = classNames("tree-row", {
-            selected: treeAdapter.isSelected(item),
-            "drag-source":
-                treeAdapter.draggableAdapter &&
-                treeAdapter.draggableAdapter.isDragSource(item)
-        });
-
-        let triangle: JSX.Element | undefined;
-        if (collapsable) {
-            triangle = (
-                <Icon
-                    icon={
-                        treeAdapter.collapsableAdapter!.isExpanded(item)
-                            ? "material:keyboard_arrow_down"
-                            : "material:keyboard_arrow_right"
-                    }
-                    size={18}
-                    className="tree-row-triangle"
-                    onClick={onToggleCollapse}
-                />
-            );
         }
 
-        return (
-            <div
-                ref={ref}
-                data-object-id={treeAdapter.getItemId(item)}
-                className={className}
-                style={{
-                    paddingLeft:
-                        treeAdapter.maxLevel === 0
-                            ? 0
-                            : (triangle ? 0 : 18) + level * 18
-                }}
-                onMouseUp={onMouseUp}
-                onClick={onClick}
-                onDoubleClick={onDoubleClick}
-                draggable={draggable}
-                onDragStart={onDragStart}
-                onDrag={onDrag}
-                onDragEnd={onDragEnd}
-            >
-                {triangle}
+        componentWillUnmount(): void {
+            if (this.ensureVisibleTimeout) {
+                clearTimeout(this.ensureVisibleTimeout);
+                this.ensureVisibleTimeout = undefined;
+            }
+        }
 
-                {renderItem ? (
-                    renderItem(treeAdapter.getItemId(item))
-                ) : (
-                    <span style={{ flex: 1 }}>
-                        {treeAdapter.itemToString(item)}
-                    </span>
-                )}
+        render() {
+            const {
+                treeAdapter,
+                item,
+                level,
+                collapsable,
+                onToggleCollapse,
+                onEditItem
+            } = this.props;
 
-                {onEditItem && (
+            let className = classNames("tree-row", {
+                selected: treeAdapter.isSelected(item),
+                "drag-source":
+                    treeAdapter.draggableAdapter &&
+                    treeAdapter.draggableAdapter.isDragSource(item)
+            });
+
+            let triangle: JSX.Element | undefined;
+            if (collapsable) {
+                triangle = (
                     <Icon
-                        icon="material:edit"
+                        icon={
+                            treeAdapter.collapsableAdapter!.isExpanded(item)
+                                ? "material:keyboard_arrow_down"
+                                : "material:keyboard_arrow_right"
+                        }
                         size={18}
-                        className="EditIcon"
-                        onClick={() => onEditItem(treeAdapter.getItemId(item))}
+                        className="tree-row-triangle"
+                        onClick={onToggleCollapse}
                     />
-                )}
-            </div>
-        );
+                );
+            }
+
+            return (
+                <div
+                    ref={this.ref}
+                    data-object-id={treeAdapter.getItemId(item)}
+                    className={className}
+                    style={{
+                        paddingLeft:
+                            treeAdapter.maxLevel === 0
+                                ? 4
+                                : (triangle ? 0 : 18) + level * 18
+                    }}
+                    onMouseUp={this.props.onMouseUp}
+                    onClick={this.props.onClick}
+                    onDoubleClick={this.props.onDoubleClick}
+                    draggable={this.props.draggable}
+                    onDragStart={this.props.onDragStart}
+                    onDrag={this.props.onDrag}
+                    onDragEnd={this.props.onDragEnd}
+                >
+                    {triangle}
+
+                    {this.props.renderItem ? (
+                        this.props.renderItem(treeAdapter.getItemId(item))
+                    ) : (
+                        <span style={{ flex: 1 }}>
+                            {treeAdapter.itemToString(item)}
+                        </span>
+                    )}
+
+                    {onEditItem && (
+                        <Icon
+                            icon="material:edit"
+                            size={18}
+                            className="EditIcon"
+                            onClick={() =>
+                                onEditItem(treeAdapter.getItemId(item))
+                            }
+                        />
+                    )}
+                </div>
+            );
+        }
     }
 );
 
 ////////////////////////////////////////////////////////////////////////////////
-
-export interface DropFile {
-    path: string;
-    type: string;
-}
 
 interface TreeProps {
     treeAdapter: TreeAdapter;
@@ -181,11 +178,14 @@ interface TreeProps {
     onFocus?: () => void;
     onEditItem?: (itemId: string) => void;
     renderItem?: (itemId: string) => React.ReactNode;
-    onFilesDrop?: (files: DropFile[]) => void;
+    onFilesDrop?: (files: File[]) => void;
 }
 
 export const Tree = observer(
     class Tree extends React.Component<TreeProps, {}> {
+        static contextType = ProjectContext;
+        declare context: React.ContextType<typeof ProjectContext>;
+
         static defaultProps = {
             tabIndex: -1,
             maxLevel: undefined,
@@ -241,11 +241,17 @@ export const Tree = observer(
             } else if (event.shiftKey) {
             } else if (event.ctrlKey) {
                 if (event.keyCode == "X".charCodeAt(0)) {
+                    event.preventDefault();
+                    event.stopPropagation();
                     this.props.treeAdapter.cutSelection();
                 } else if (event.keyCode == "C".charCodeAt(0)) {
+                    event.preventDefault();
+                    event.stopPropagation();
                     this.props.treeAdapter.copySelection();
                 } else if (event.keyCode == "V".charCodeAt(0)) {
-                    this.props.treeAdapter.pasteSelection();
+                    event.preventDefault();
+                    event.stopPropagation();
+                    this.context.paste();
                 }
             } else {
                 let focusedItemId = $(this.treeDiv)
@@ -371,7 +377,7 @@ export const Tree = observer(
 
                 if ($allRows.length > 0) {
                     const firstRowRect = $allRows
-                        .get(0)
+                        .get(0)!
                         .getBoundingClientRect();
                     const treeDivRect = this.treeDiv.getBoundingClientRect();
                     let rowIndexAtCursor = Math.floor(
@@ -384,10 +390,12 @@ export const Tree = observer(
                         rowIndexAtCursor < $allRows.length
                     ) {
                         const $row = $allRows.eq(rowIndexAtCursor);
-                        const rowRect = $row.get(0).getBoundingClientRect();
+                        const rowRect = $row.get(0)!.getBoundingClientRect();
 
                         const $label = $row.find("span");
-                        const labelRect = $label.get(0).getBoundingClientRect();
+                        const labelRect = $label
+                            .get(0)!
+                            .getBoundingClientRect();
 
                         const objectId = $row.attr("data-object-id");
                         let dropItem = treeAdapter.getItemFromId(objectId!)!;
@@ -487,7 +495,7 @@ export const Tree = observer(
 
                                             const $label = $row.find("span");
                                             const labelRect = $label
-                                                .get(0)
+                                                .get(0)!
                                                 .getBoundingClientRect();
 
                                             if (
@@ -550,7 +558,7 @@ export const Tree = observer(
 
                                 const $label = $row.find("span");
                                 const labelRect = $label
-                                    .get(0)
+                                    .get(0)!
                                     .getBoundingClientRect();
 
                                 this.dropMarkVerticalConnectionLineHeight =
@@ -586,7 +594,7 @@ export const Tree = observer(
                                             const $row2 =
                                                 $allRows.eq(rowIndexAtCursor);
                                             const rowRect2 = $row2
-                                                .get(0)
+                                                .get(0)!
                                                 .getBoundingClientRect();
 
                                             this.dropMarkTop = rowRect2.bottom;
@@ -632,17 +640,19 @@ export const Tree = observer(
             this.props.treeAdapter.draggableAdapter!.onDragLeave(event);
         }
 
-        onDrop(event: any) {
+        onDrop(event: React.DragEvent) {
             event.stopPropagation();
             event.preventDefault();
 
             if (isFileData(event)) {
                 if (this.props.onFilesDrop) {
-                    const files: DropFile[] = [];
+                    const files: File[] = [];
                     for (let i = 0; i < event.dataTransfer.items.length; i++) {
                         const item = event.dataTransfer.items[i];
                         const file = item.getAsFile();
-                        files.push(file);
+                        if (file) {
+                            files.push(file);
+                        }
                     }
                     this.props.onFilesDrop(files);
                 }
@@ -745,7 +755,7 @@ export const Tree = observer(
 
                     const items = [];
                     for (let i = iFrom; i <= iTo; i++) {
-                        const id = $($rows.get(i)).attr("data-object-id");
+                        const id = $($rows.get(i)!).attr("data-object-id");
                         if (id) {
                             const item =
                                 this.props.treeAdapter.getItemFromId(id);

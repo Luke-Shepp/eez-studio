@@ -22,7 +22,8 @@ import {
     makePushOutputInstruction,
     makeArrayElementInstruction,
     makeOperationInstruction,
-    makeEndInstruction
+    makeEndInstruction,
+    makeEndInstructionWithType
 } from "./instructions";
 import { FLOW_ITERATOR_INDEX_VARIABLE } from "project-editor/features/variable/defs";
 import {
@@ -132,7 +133,9 @@ export function buildAssignableExpression(
 
     const instructions = buildExpressionNode(assets, component, rootNode, true);
 
-    instructions.push(makeEndInstruction());
+    instructions.push(
+        ...makeEndInstructionWithType(assets, rootNode.valueType)
+    );
 
     instructions.forEach(instruction =>
         dataBuffer.writeUint16NonAligned(instruction)
@@ -202,7 +205,7 @@ function buildExpressionNode(
         }
 
         const flow = ProjectEditor.getFlow(component);
-        let localVariableIndex = flow.localVariables.findIndex(
+        let localVariableIndex = flow.userPropertiesAndLocalVariables.findIndex(
             localVariable => localVariable.name == node.name
         );
         if (localVariableIndex != -1) {
@@ -381,6 +384,10 @@ function buildExpressionNode(
                     )
                 ];
             }
+        }
+
+        if (functionName == "Crypto.sha256") {
+            assets.isUsingCrypyoSha256 = true;
         }
 
         return [
@@ -573,21 +580,82 @@ function buildExpressionNode(
     if (node.type == "ObjectExpression") {
         const type = assets.projectStore.typesStore.getType(node.valueType);
         if (!type || type.kind != "object") {
+            if (
+                assets.projectStore.projectTypeTraits.isDashboard &&
+                type?.valueType == "json"
+            ) {
+                return [
+                    // elements
+                    ...node.properties.reduce((instructions, property) => {
+                        let propertyName;
+                        if (property.key.type == "Identifier") {
+                            propertyName = property.key.name;
+                        } else if (property.key.type == "Literal") {
+                            propertyName = property.key.value;
+                        } else {
+                            console.log(property);
+                            throw `invalid field node "${property.key.type}"`;
+                        }
+
+                        return [
+                            ...buildExpressionNode(
+                                assets,
+                                component,
+                                property.value,
+                                assignable
+                            ),
+                            makePushConstantInstruction(
+                                assets,
+                                propertyName,
+                                "string"
+                            ),
+                            ...instructions
+                        ];
+                    }, []),
+                    // no. of init elements
+                    makePushConstantInstruction(
+                        assets,
+                        node.properties.length * 2,
+                        "integer"
+                    ),
+                    // no. of elements
+                    makePushConstantInstruction(
+                        assets,
+                        node.properties.length * 2,
+                        "integer"
+                    ),
+                    // array type
+                    makePushConstantInstruction(
+                        assets,
+                        assets.getTypeIndex(node.valueType),
+                        "integer"
+                    ),
+                    makeOperationInstruction(
+                        operationIndexes["Flow.makeArrayValue"]
+                    )
+                ];
+            }
+
             throw `Can't build ObjectExpression for type: ${node.valueType}`;
         }
 
         const fieldValues: ExpressionNode[] = [];
 
         node.properties.forEach(property => {
+            let propertyName;
             if (property.key.type == "Identifier") {
-                const fieldIndex = type.fieldIndexes[property.key.name];
-                if (fieldIndex == undefined) {
-                    throw `Field ${property.key.name} not in ${node.valueType}`;
-                }
-                fieldValues[fieldIndex] = property.value;
+                propertyName = property.key.name;
+            } else if (property.key.type == "Literal") {
+                propertyName = property.key.value;
             } else {
                 throw `invalid field node "${property.key.type}"`;
             }
+
+            const fieldIndex = type.fieldIndexes[propertyName];
+            if (fieldIndex == undefined) {
+                throw `Field ${propertyName} not in ${node.valueType}`;
+            }
+            fieldValues[fieldIndex] = property.value;
         });
 
         for (let i = 0; i < type.fields.length; i++) {

@@ -21,6 +21,10 @@
     user-select: auto;
 }
 
+.modal > .modal-dialog > .modal-content {
+    box-shadow: @modalDialogDropdownShadow;
+}
+
 body {
     overflow: hidden;
     font-size: 0.8rem;
@@ -312,6 +316,15 @@ input::placeholder {
         text-overflow: ellipsis;
     }
 
+    td.StaticPropertyValueWrap {
+        white-space: normal;
+        overflow-wrap: break-word;
+        border: 1px solid @borderColor;
+        border-radius: 3px;
+        padding: 4px 8px;
+        max-width: 200px;
+    }
+
     td.StaticPropertyValue {
         user-select: text;
     }
@@ -463,8 +476,10 @@ input::placeholder {
 }
 
 button.EezStudio_Action {
-    &:active {
-        transform: translate(1px, 1px);
+    &:not(:disabled) {
+        &:active {
+            transform: translate(1px, 1px);
+        }
     }
 
     &:not(.btn-outline-success, .btn-outline-danger) {
@@ -1068,6 +1083,7 @@ button.EezStudio_Action {
         display: flex;
         white-space: nowrap;
         position: relative;
+        border-radius: 3px;
 
         &.drag-source {
             background-color: @dragSourceBackgroundColor;
@@ -1157,24 +1173,6 @@ button.EezStudio_Action {
 
 .EezStudio_TablesDiv {
     padding-top: 15px;
-}
-
-.EezStudio_ToolbarNav {
-    padding: 3px;
-    background-color: @panelHeaderColor;
-    border-bottom: 1px solid @borderColor;
-
-    .btn {
-        padding: 0.25rem 0.75rem;
-    }
-
-    .btn-group:not(:last-child) {
-        margin-right: 20px;
-    }
-
-    select {
-        height: 36px;
-    }
 }
 
 .EezStudio_PanelHeader {

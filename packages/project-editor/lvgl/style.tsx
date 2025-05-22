@@ -1,6 +1,6 @@
 import { MenuItem } from "@electron/remote";
 import React from "react";
-import { computed, makeObservable, observable } from "mobx";
+import { computed, makeObservable, observable, toJS } from "mobx";
 import { observer } from "mobx-react";
 import * as FlexLayout from "flexlayout-react";
 
@@ -32,8 +32,27 @@ import { Icon } from "eez-studio-ui/icon";
 import type { ProjectEditorFeature } from "project-editor/store/features";
 import { LVGLStylesTreeNavigation } from "project-editor/lvgl/LVGLStylesTreeNavigation";
 import type { LVGLPageRuntime } from "project-editor/lvgl/page-runtime";
-import type { Page } from "project-editor/features/page/page";
+import {
+    findBitmap,
+    findFont,
+    type Project
+} from "project-editor/project/project";
+import { getSelectorCode } from "project-editor/lvgl/style-helper";
+import {
+    BUILT_IN_FONTS,
+    lvglPropertiesMap,
+    text_font_property_info
+} from "project-editor/lvgl/style-catalog";
 import type { LVGLWidget } from "project-editor/lvgl/widgets";
+import { getLvglCoord } from "./lvgl-versions";
+
+////////////////////////////////////////////////////////////////////////////////
+
+export type LVGLStyleObjects = {
+    [part: string]: {
+        [state: string]: number;
+    };
+};
 
 ////////////////////////////////////////////////////////////////////////////////
 
@@ -86,6 +105,14 @@ export class LVGLStyle extends EezObject {
     childStyles: LVGLStyle[];
     definition: LVGLStylesDefinition;
 
+    constructor() {
+        super();
+
+        makeObservable(this, {
+            fullDefinition: computed
+        });
+    }
+
     override makeEditable() {
         super.makeEditable();
 
@@ -107,6 +134,22 @@ export class LVGLStyle extends EezObject {
             {
                 name: "forWidgetType",
                 type: PropertyType.String,
+                displayValue: (style: LVGLStyle) => {
+                    const componentClass = getClassesDerivedFrom(
+                        ProjectEditor.getProjectStore(style),
+                        ProjectEditor.LVGLWidgetClass
+                    ).find(
+                        componentClass =>
+                            componentClass.name == style.forWidgetType
+                    );
+                    return componentClass
+                        ? componentClass.displayName
+                            ? componentClass.displayName
+                            : componentClass.objectClass.classInfo
+                                  .componentPaletteLabel ||
+                              getComponentName(componentClass.name)
+                        : style.forWidgetType;
+                },
                 readOnlyInPropertyGrid: true
             },
             {
@@ -241,9 +284,9 @@ export class LVGLStyle extends EezObject {
             forWidgetType: "LVGLPanelWidget",
             definition: {}
         },
-        lvgl: (lvglStyle: LVGLStyle) => {
+        lvgl: (lvglStyle: LVGLStyle, project: Project) => {
             const componentClass = getClassesDerivedFrom(
-                ProjectEditor.getProjectStore(lvglStyle),
+                project._store,
                 ProjectEditor.LVGLWidgetClass
             ).find(
                 componentClass => componentClass.name == lvglStyle.forWidgetType
@@ -251,15 +294,20 @@ export class LVGLStyle extends EezObject {
 
             if (componentClass) {
                 if (
-                    typeof componentClass.objectClass.classInfo.lvgl == "object"
+                    typeof componentClass.objectClass.classInfo.lvgl ==
+                    "function"
                 ) {
+                    return componentClass.objectClass.classInfo.lvgl(
+                        lvglStyle,
+                        project
+                    );
+                } else if (componentClass.objectClass.classInfo.lvgl) {
                     return componentClass.objectClass.classInfo.lvgl;
                 }
             }
 
             return {
                 parts: [],
-                flags: [],
                 defaultFlags: "",
                 states: []
             };
@@ -359,15 +407,263 @@ export class LVGLStyle extends EezObject {
         });
     }
 
-    lvglCreate(
+    get fullDefinition() {
+        let fullDefinition = toJS(this.definition.definition);
+
+        if (this.parentStyle) {
+            const parentDefinition = this.parentStyle.fullDefinition;
+
+            if (parentDefinition) {
+                Object.keys(parentDefinition).forEach(part => {
+                    Object.keys(parentDefinition[part]).forEach(state => {
+                        Object.keys(parentDefinition[part][state]).forEach(
+                            propertyName => {
+                                if (!fullDefinition) {
+                                    fullDefinition = {};
+                                }
+                                if (!fullDefinition[part]) {
+                                    fullDefinition[part] = {};
+                                }
+                                if (!fullDefinition[part][state]) {
+                                    fullDefinition[part][state] = {};
+                                }
+
+                                if (
+                                    fullDefinition[part][state][propertyName] ==
+                                    undefined
+                                ) {
+                                    fullDefinition[part][state][propertyName] =
+                                        parentDefinition[part][state][
+                                            propertyName
+                                        ];
+                                }
+                            }
+                        );
+                    });
+                });
+            }
+        }
+
+        return fullDefinition;
+    }
+
+    lvglCreateLocalStyles(
         runtime: LVGLPageRuntime,
-        widget: LVGLWidget | Page,
+        widget: LVGLWidget,
         obj: number
     ) {
         if (this.parentStyle) {
-            this.parentStyle.lvglCreate(runtime, widget, obj);
+            this.parentStyle.lvglCreateLocalStyles(runtime, widget, obj);
         }
         this.definition.lvglCreate(runtime, widget, obj);
+    }
+
+    lvglCreateStyles(runtime: LVGLPageRuntime) {
+        const lvglStyleObjects: LVGLStyleObjects = {};
+
+        const project = ProjectEditor.getProject(runtime.page);
+        const lvglVersion = project.settings.general.lvglVersion;
+
+        const definition = this.fullDefinition;
+
+        if (definition) {
+            Object.keys(definition).forEach(part => {
+                Object.keys(definition[part]).forEach(state => {
+                    let styleObj: number | undefined;
+
+                    function getStyleObj() {
+                        if (!styleObj) {
+                            styleObj = runtime.wasm._lvglStyleCreate();
+                        }
+                        return styleObj;
+                    }
+
+                    Object.keys(definition[part][state]).forEach(
+                        propertyName => {
+                            const propertyInfo =
+                                lvglPropertiesMap.get(propertyName);
+                            if (
+                                !propertyInfo ||
+                                propertyInfo.lvglStyleProp.code[lvglVersion] ==
+                                    undefined
+                            ) {
+                                return;
+                            }
+
+                            const value = definition[part][state][propertyName];
+
+                            if (propertyInfo.type == PropertyType.ThemedColor) {
+                                runtime.lvglSetAndUpdateStyleColor(
+                                    value,
+                                    (wasm, colorNum) => {
+                                        wasm._lvglStyleSetPropColor(
+                                            getStyleObj(),
+                                            runtime.getLvglStylePropCode(
+                                                propertyInfo.lvglStyleProp.code
+                                            ),
+                                            colorNum
+                                        );
+                                    }
+                                );
+                            } else if (
+                                propertyInfo.type == PropertyType.Number ||
+                                propertyInfo.type == PropertyType.Enum
+                            ) {
+                                if (propertyInfo == text_font_property_info) {
+                                    const index = BUILT_IN_FONTS.indexOf(value);
+                                    if (index != -1) {
+                                        runtime.wasm._lvglSetStylePropBuiltInFont(
+                                            getStyleObj(),
+                                            runtime.getLvglStylePropCode(
+                                                propertyInfo.lvglStyleProp.code
+                                            ),
+                                            index
+                                        );
+                                    } else {
+                                        const font = findFont(project, value);
+
+                                        if (font) {
+                                            const fontPtr =
+                                                runtime.getFontPtr(font);
+                                            if (fontPtr) {
+                                                runtime.wasm._lvglSetStylePropPtr(
+                                                    getStyleObj(),
+                                                    runtime.getLvglStylePropCode(
+                                                        propertyInfo
+                                                            .lvglStyleProp.code
+                                                    ),
+                                                    fontPtr
+                                                );
+                                            }
+                                        }
+                                    }
+                                } else {
+                                    const numValue = propertyInfo.lvglStyleProp
+                                        .valueToNum
+                                        ? propertyInfo.lvglStyleProp.valueToNum(
+                                              value,
+                                              runtime
+                                          )
+                                        : value;
+
+                                    runtime.wasm._lvglSetStylePropNum(
+                                        getStyleObj(),
+                                        runtime.getLvglStylePropCode(
+                                            propertyInfo.lvglStyleProp.code
+                                        ),
+                                        numValue
+                                    );
+                                }
+                            } else if (
+                                propertyInfo.type ==
+                                PropertyType.NumberArrayAsString
+                            ) {
+                                const arrValue: number[] = propertyInfo
+                                    .lvglStyleProp.valueToNum
+                                    ? propertyInfo.lvglStyleProp.valueToNum(
+                                          value,
+                                          runtime
+                                      )
+                                    : value;
+
+                                const { LV_COORD_MAX } = getLvglCoord(this);
+                                const LV_GRID_TEMPLATE_LAST = LV_COORD_MAX;
+
+                                arrValue.push(LV_GRID_TEMPLATE_LAST);
+
+                                runtime.wasm._lvglSetStylePropPtr(
+                                    getStyleObj(),
+                                    runtime.getLvglStylePropCode(
+                                        propertyInfo.lvglStyleProp.code
+                                    ),
+                                    runtime.allocateInt32Array(arrValue, true)
+                                );
+                            } else if (
+                                propertyInfo.type == PropertyType.Boolean
+                            ) {
+                                const numValue = value ? 1 : 0;
+
+                                runtime.wasm._lvglSetStylePropNum(
+                                    getStyleObj(),
+                                    runtime.getLvglStylePropCode(
+                                        propertyInfo.lvglStyleProp.code
+                                    ),
+                                    numValue
+                                );
+                            } else if (
+                                propertyInfo.type ==
+                                    PropertyType.ObjectReference &&
+                                propertyInfo.referencedObjectCollectionPath ==
+                                    "bitmaps"
+                            ) {
+                                const bitmap = findBitmap(project, value);
+                                if (bitmap && bitmap.image) {
+                                    const bitmapPtr =
+                                        runtime.getBitmapPtr(bitmap);
+                                    if (bitmapPtr) {
+                                        runtime.wasm._lvglSetStylePropPtr(
+                                            getStyleObj(),
+                                            runtime.getLvglStylePropCode(
+                                                propertyInfo.lvglStyleProp.code
+                                            ),
+                                            bitmapPtr
+                                        );
+                                    }
+                                }
+                            }
+                        }
+                    );
+
+                    if (styleObj) {
+                        if (!lvglStyleObjects[part]) {
+                            lvglStyleObjects[part] = {};
+                        }
+
+                        lvglStyleObjects[part][state] = styleObj;
+                    }
+                });
+            });
+        }
+
+        return lvglStyleObjects;
+    }
+
+    lvglDeleteStyles(runtime: LVGLPageRuntime, styles: LVGLStyleObjects) {
+        Object.keys(styles).forEach(part => {
+            Object.keys(styles[part]).forEach(state => {
+                runtime.wasm._lvglStyleDelete(styles[part][state]);
+            });
+        });
+    }
+
+    lvglAddStyleToObject(runtime: LVGLPageRuntime, obj: number) {
+        const lvglStyleObjects = runtime.styleObjMap.get(this) || {};
+
+        Object.keys(lvglStyleObjects).forEach(part => {
+            Object.keys(lvglStyleObjects[part]).forEach(state => {
+                const selectorCode = getSelectorCode(this, part, state);
+                runtime.wasm._lvglObjAddStyle(
+                    obj,
+                    lvglStyleObjects[part][state],
+                    selectorCode
+                );
+            });
+        });
+    }
+
+    lvglRemoveStyleFromObject(runtime: LVGLPageRuntime, obj: number) {
+        const lvglStyleObjects = runtime.styleObjMap.get(this) || {};
+
+        Object.keys(lvglStyleObjects).forEach(part => {
+            Object.keys(lvglStyleObjects[part]).forEach(state => {
+                const selectorCode = getSelectorCode(this, part, state);
+                runtime.wasm._lvglObjRemoveStyle(
+                    obj,
+                    lvglStyleObjects[part][state],
+                    selectorCode
+                );
+            });
+        });
     }
 }
 
@@ -560,7 +856,6 @@ export const LVGLSelectedStyleEditor = observer(
                         width={this.runtime.displayWidth}
                         height={this.runtime.displayHeight}
                         style={{
-                            imageRendering: "pixelated",
                             maxWidth: "100%",
                             maxHeight: "100%"
                         }}

@@ -3,23 +3,18 @@ import { observable, makeObservable } from "mobx";
 
 import { humanize } from "eez-studio-shared/string";
 import { Rect } from "eez-studio-shared/geometry";
+import { isArray, objectClone } from "eez-studio-shared/util";
 
 import type { IDashboardComponentContext } from "eez-studio-types";
 
-import {
+import type { IResizeHandler } from "project-editor/flow/flow-interfaces";
+import type { ValueType } from "project-editor/features/variable/value-type";
+import type { Project } from "project-editor/project/project";
+import type {
     ProjectStore,
     IContextMenuContext,
-    getClassInfo,
     EezValueObject
 } from "project-editor/store";
-
-import type { IResizeHandler } from "project-editor/flow/flow-interfaces";
-
-import type { ValueType } from "project-editor/features/variable/value-type";
-import type { LVGLParts } from "project-editor/lvgl/style-helper";
-import type { Project } from "project-editor/project/project";
-
-import { isArray } from "eez-studio-shared/util";
 
 ////////////////////////////////////////////////////////////////////////////////
 
@@ -50,6 +45,7 @@ export const enum PropertyType {
 
     GUID,
 
+    NumberArrayAsString,
     StringArray,
     ConfigurationReference,
     Any,
@@ -79,6 +75,7 @@ export const TYPE_NAMES: { [key in PropertyType]: string } = {
     [PropertyType.Python]: "Python",
     [PropertyType.CPP]: "CPP",
     [PropertyType.GUID]: "GUID",
+    [PropertyType.NumberArrayAsString]: "NumberArrayAsString",
     [PropertyType.StringArray]: "StringArray",
     [PropertyType.ConfigurationReference]: "ConfigurationReference",
     [PropertyType.Any]: "Any",
@@ -130,7 +127,7 @@ export interface PropertyProps {
     objects: IEezObject[];
     readOnly: boolean;
     updateObject: (propertyValues: Object) => void;
-    collapsed?: boolean;
+    onClick?: (event: React.MouseEvent) => void;
 }
 
 export interface IOnSelectParams {
@@ -147,6 +144,18 @@ export type FlowPropertyType =
     | "template-literal"
     | "scpi-template-literal";
 
+export type LvglActionPropertyType =
+    | "boolean"
+    | "integer"
+    | "string"
+    | `enum:${string}`
+    | "screen"
+    | "widget"
+    | `widget:${string}`
+    | "group"
+    | "style"
+    | "image";
+
 export interface PropertyInfo {
     name: string;
     type: PropertyType;
@@ -158,6 +167,7 @@ export interface PropertyInfo {
 
     // optional properties
     displayName?: string | ((object: IEezObject) => string);
+    displayValue?: (object: IEezObject) => any;
     enumItems?: EnumItem[] | ((object: IEezObject) => EnumItem[]);
     enumDisallowUndefined?: boolean;
     typeClass?: EezClass;
@@ -167,6 +177,7 @@ export interface PropertyInfo {
         referencedObject: IEezObject
     ) => boolean;
     computed?: boolean;
+    computedIfNotLoadProject?: boolean;
     modifiable?: boolean;
     onSelect?: (
         object: IEezObject,
@@ -188,6 +199,7 @@ export interface PropertyInfo {
     propertyGridGroup?: IPropertyGridGroupDefinition;
     propertyGridRowComponent?: React.ComponentType<PropertyProps>;
     propertyGridColumnComponent?: React.ComponentType<PropertyProps>;
+    propertyGridFullRowComponent?: React.ComponentType<PropertyProps>;
     propertyGridCollapsable?: boolean;
     propertyGridCollapsableDefaultPropertyName?: string;
     propertyGridCollapsableEnabled?: (object: IEezObject) => boolean;
@@ -203,6 +215,16 @@ export interface PropertyInfo {
     nonInheritable?: boolean;
     propertyMenu?: (props: PropertyProps) => Electron.MenuItem[];
     unique?:
+        | boolean
+        | ((
+              object: IEezObject,
+              parent: IEezObject,
+              propertyInfo: PropertyInfo
+          ) => (
+              object: any,
+              ruleName: string
+          ) => Promise<string | null> | string | null);
+    uniqueIdentifier?:
         | boolean
         | ((
               object: IEezObject,
@@ -236,12 +258,15 @@ export interface PropertyInfo {
         | boolean
         | ((object: IEezObject, propertyInfo: PropertyInfo) => boolean);
 
+    isFlowPropertyBuildable?: (
+        object: IEezObject,
+        propertyInfo: PropertyInfo
+    ) => boolean;
+
     monospaceFont?: boolean;
-    disableSpellcheck?: boolean;
     cssAttributeName?: string;
     checkboxStyleSwitch?: boolean;
     checkboxHideLabel?: boolean;
-    arrayItemOrientation?: "vertical" | "horizontal";
     disableBitmapPreview?: boolean;
     inputPlaceholder?: (object: IEezObject) => string;
     embeddedImage?: boolean;
@@ -250,15 +275,26 @@ export interface PropertyInfo {
 
     formText?:
         | string
-        | ((object: IEezObject | undefined) => string | undefined);
-
-    propertyNameAbove?: boolean;
+        | ((object: IEezObject | undefined) => React.ReactNode | undefined);
 
     hasExpressionProperties?: boolean;
 
     hideInDocumentation?: "widget" | "action" | "all" | "none";
 
     getInstrumentId?: (parentObject: IEezObject) => string | undefined;
+
+    arrayPropertyEditorAdditionalButtons?: (
+        parentObject: IEezObject,
+        propertyInfo: PropertyInfo,
+        projectStore: ProjectStore
+    ) => React.ReactNode[];
+
+    colorEditorForLiteral?: boolean;
+
+    lvglActionPropertyType?: LvglActionPropertyType;
+
+    showArrayCollapsedByDefaultInPropertyGrid?: boolean;
+    hideElementIndexInPropertyGrid?: boolean;
 }
 
 export type InheritedValue =
@@ -269,59 +305,26 @@ export type InheritedValue =
     | undefined;
 
 export interface SerializedData {
+    originProjectFilePath: string;
+
     objectClassName: string;
     classInfo?: ClassInfo;
+
     object?: EezObject;
+    objectParentPath?: string;
+
     objects?: EezObject[];
+    objectsParentPath?: string[];
 }
 
-export const LVGL_FLAG_CODES = {
-    HIDDEN: 1 << 0, // Make the object hidden. (Like it wasn't there at all)
-    CLICKABLE: 1 << 1, // Make the object clickable by the input devices
-    CLICK_FOCUSABLE: 1 << 2, // Add focused state to the object when clicked
-    CHECKABLE: 1 << 3, // Toggle checked state when the object is clicked
-    SCROLLABLE: 1 << 4, // Make the object scrollable
-    SCROLL_ELASTIC: 1 << 5, // Allow scrolling inside but with slower speed
-    SCROLL_MOMENTUM: 1 << 6, // Make the object scroll further when "thrown"
-    SCROLL_ONE: 1 << 7, // Allow scrolling only one snappable children
-    SCROLL_CHAIN_HOR: 1 << 8, // Allow propagating the horizontal scroll to a parent
-    SCROLL_CHAIN_VER: 1 << 9, // Allow propagating the vertical scroll to a parent
-    SCROLL_CHAIN: (1 << 8) | (1 << 9),
-    SCROLL_ON_FOCUS: 1 << 10, // Automatically scroll object to make it visible when focused
-    SCROLL_WITH_ARROW: 1 << 11, // Allow scrolling the focused object with arrow keys
-    SNAPPABLE: 1 << 12, // If scroll snap is enabled on the parent it can snap to this object
-    PRESS_LOCK: 1 << 13, // Keep the object pressed even if the press slid from the object
-    EVENT_BUBBLE: 1 << 14, // Propagate the events to the parent too
-    GESTURE_BUBBLE: 1 << 15, // Propagate the gestures to the parent
-    ADV_HITTEST: 1 << 16, // Allow performing more accurate hit (click) test. E.g. consider rounded corners.
-    IGNORE_LAYOUT: 1 << 17, // Make the object position-able by the layouts
-    FLOATING: 1 << 18, // Do not scroll the object when the parent scrolls and ignore layout
-    OVERFLOW_VISIBLE: 1 << 19 // Do not clip the children's content to the parent's boundary*/
-};
-
-export const LVGL_REACTIVE_FLAGS: (keyof typeof LVGL_FLAG_CODES)[] = [
-    "HIDDEN",
-    "CLICKABLE"
-];
-
-export const LVGL_STATE_CODES = {
-    CHECKED: 0x0001,
-    DISABLED: 0x0080,
-    FOCUSED: 0x0002,
-    PRESSED: 0x0020
-};
-
-export const LVGL_REACTIVE_STATES: (keyof typeof LVGL_STATE_CODES)[] = [
-    "CHECKED",
-    "DISABLED"
-];
+export type LVGLParts = string;
 
 interface LVGLClassInfoProperties {
-    parts: LVGLParts[];
-    flags: (keyof typeof LVGL_FLAG_CODES)[];
+    parts: LVGLParts[] | ((object: IEezObject) => LVGLParts[]);
     defaultFlags: string;
-    states: (keyof typeof LVGL_STATE_CODES)[];
-    defaultStates?: string;
+
+    oldInitFlags?: string;
+    oldDefaultFlags?: string;
 }
 
 export type WidgetEvents = {
@@ -374,9 +377,19 @@ export interface ClassInfo {
     ) => IEezObject | PropertyInfo | undefined;
 
     icon?: React.ReactNode;
-    getIcon?: (object: IEezObject) => React.ReactNode;
+    getIcon?: (
+        object?: IEezObject,
+        componentClass?: IObjectClassInfo,
+        projectStore?: ProjectStore
+    ) => React.ReactNode | undefined;
 
-    componentHeaderColor?: string;
+    componentHeaderColor?:
+        | ((
+              object?: IEezObject,
+              componentClass?: IObjectClassInfo,
+              projectStore?: ProjectStore
+          ) => string)
+        | string;
     componentHeaderTextColor?: string;
 
     beforeLoadHook?: (
@@ -443,7 +456,7 @@ export interface ClassInfo {
 
     lvgl?:
         | LVGLClassInfoProperties
-        | ((object: IEezObject) => LVGLClassInfoProperties);
+        | ((object: IEezObject, project: Project) => LVGLClassInfoProperties);
 
     showTreeCollapseIcon?: "always" | "has-children" | "never";
 
@@ -453,9 +466,19 @@ export interface ClassInfo {
 
     findChildIndex?: (parent: IEezObject[], child: IEezObject) => number;
 
-    widgetEvents?: WidgetEvents;
+    widgetEvents?: WidgetEvents | ((object: IEezObject) => WidgetEvents);
 
     addObjectHook?: (object: IEezObject, parent: IEezObject) => void;
+
+    overrideEventParamExpressionType?: (
+        object: IEezObject,
+        eventName: string
+    ) => ValueType | undefined;
+
+    getPropertyDisplayName?: (
+        object: IEezObject,
+        propertyKey: string
+    ) => string | undefined;
 }
 
 export function makeDerivedClassInfo(
@@ -615,6 +638,18 @@ export function isEezObject(object: any): object is IEezObject {
 }
 
 ////////////////////////////////////////////////////////////////////////////////
+
+export function getClass(object: IEezObject) {
+    if (isArray(object)) {
+        return getPropertyInfo(object).typeClass!;
+    } else {
+        return object.constructor as EezClass;
+    }
+}
+
+export function getClassInfo(object: IEezObject): ClassInfo {
+    return getClass(object).classInfo;
+}
 
 export function findClass(className: string) {
     return classNameToEezClassMap.get(className);
@@ -811,12 +846,12 @@ export function findPropertyByNameInClassInfo(
             classInfo,
             propertyName.substring(0, i)
         );
-        if (!propertyInfo) {
+        if (!propertyInfo || !propertyInfo.typeClass) {
             return undefined;
         }
 
         return findPropertyByNameInClassInfo(
-            propertyInfo.typeClass!.classInfo,
+            propertyInfo.typeClass.classInfo,
             propertyName.substring(i + 1)
         );
     }
@@ -824,6 +859,17 @@ export function findPropertyByNameInClassInfo(
     return classInfo.properties.find(
         propertyInfo => propertyInfo.name == propertyName
     );
+}
+
+export function isPropertyDisabled(
+    object: IEezObject,
+    propertyInfo: PropertyInfo
+) {
+    if (propertyInfo.disabled && propertyInfo.disabled(object, propertyInfo)) {
+        return true;
+    }
+
+    return false;
 }
 
 export function isPropertyHidden(
@@ -978,11 +1024,73 @@ export function getClassInfoLvglProperties(object: IEezObject) {
         if (typeof classInfo.lvgl == "object") {
             return classInfo.lvgl;
         }
-
-        return classInfo.lvgl(object);
+        return classInfo.lvgl(object, getRootObject(object) as Project);
     } else {
-        return { parts: [], flags: [], defaultFlags: "", states: [] };
+        return {
+            parts: [],
+            defaultFlags: "",
+            oldInitFlags: "",
+            oldDefaultFlags: ""
+        };
     }
+}
+
+export function getClassInfoLvglParts(object: IEezObject) {
+    const lvglClassInfoProperties = getClassInfoLvglProperties(object);
+
+    if (typeof lvglClassInfoProperties.parts == "function") {
+        return lvglClassInfoProperties.parts(object);
+    }
+
+    return lvglClassInfoProperties.parts;
+}
+
+export function getDefaultValue(
+    projectStore: ProjectStore | undefined,
+    classInfo: ClassInfo
+) {
+    function removeClickable(flags: string) {
+        const flagsArr = flags.split("|");
+        const i = flagsArr.indexOf("CLICKABLE");
+        if (i != -1) {
+            flagsArr.splice(i, 1);
+        }
+        return flagsArr.join("|");
+    }
+
+    let defaultValue = classInfo.defaultValue;
+    if (defaultValue) {
+        if (classInfo.lvgl) {
+            if (typeof classInfo.lvgl == "function") {
+                if (projectStore) {
+                    defaultValue = objectClone(defaultValue);
+                    defaultValue.widgetFlags = removeClickable(
+                        classInfo.lvgl(
+                            projectStore.project,
+                            projectStore.project
+                        ).defaultFlags
+                    );
+                }
+            } else {
+                defaultValue = objectClone(defaultValue);
+                defaultValue.widgetFlags = removeClickable(
+                    classInfo.lvgl.defaultFlags
+                );
+            }
+        }
+    }
+    return defaultValue;
+}
+
+export function isFlowPropertyBuildable(
+    object: IEezObject,
+    propertyInfo: PropertyInfo
+) {
+    if (propertyInfo.isFlowPropertyBuildable) {
+        return propertyInfo.isFlowPropertyBuildable(object, propertyInfo);
+    }
+
+    return true;
 }
 
 ////////////////////////////////////////////////////////////////////////////////

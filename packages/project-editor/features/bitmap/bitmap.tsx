@@ -41,7 +41,7 @@ import { getThemedColor } from "project-editor/features/style/theme";
 
 import { showGenericDialog } from "project-editor/core/util";
 
-import { AbsoluteFileInput } from "project-editor/ui-components/FileInput";
+import { MultipleAbsoluteFileInput } from "project-editor/ui-components/FileInput";
 import { getProject, findStyle } from "project-editor/project/project";
 
 import { ProjectEditor } from "project-editor/project-editor-interface";
@@ -49,14 +49,13 @@ import { generalGroup } from "project-editor/ui-components/PropertyGrid/groups";
 import {
     BitmapColorFormat,
     isDashboardProject,
-    isLVGLProject
+    isLVGLProject,
+    isNotLVGLProject
 } from "project-editor/project/project-type-traits";
 import { IFieldProperties } from "eez-studio-types";
 import type { ProjectEditorFeature } from "project-editor/store/features";
-import {
-    getLvglBitmapColorFormats,
-    CF_TRUE_COLOR_ALPHA
-} from "project-editor/lvgl/lvgl-versions";
+import { getLvglBitmapColorFormats } from "project-editor/lvgl/lvgl-versions";
+import { CF_TRUE_COLOR_ALPHA } from "project-editor/lvgl/lvgl-constants";
 
 ////////////////////////////////////////////////////////////////////////////////
 
@@ -117,6 +116,8 @@ export class Bitmap extends EezObject {
     bpp: number;
     alwaysBuild: boolean;
     style?: string;
+    lvglBinaryOutputFormat: number;
+    lvglDither: boolean;
 
     constructor() {
         super();
@@ -139,7 +140,9 @@ export class Bitmap extends EezObject {
             image: observable,
             bpp: observable,
             alwaysBuild: observable,
-            style: observable
+            style: observable,
+            lvglBinaryOutputFormat: observable,
+            lvglDither: observable
         });
     }
 
@@ -181,6 +184,50 @@ export class Bitmap extends EezObject {
                         : [{ id: 16 }, { id: 32 }],
                 defaultValue: 16,
                 disabled: isDashboardProject
+            },
+            {
+                name: "lvglBinaryOutputFormat",
+                displayName: (bitmap: Bitmap) => "Binary output format",
+                type: PropertyType.Enum,
+                enumItems: [
+                    { id: 0, label: "RGB332" },
+                    { id: 1, label: "RGB565" },
+                    { id: 2, label: "RGB565 Swap" },
+                    { id: 3, label: "RGB888" }
+                ],
+                defaultValue: 3,
+                disabled: (bitmap: Bitmap) => {
+                    if (isNotLVGLProject(bitmap)) {
+                        return true;
+                    }
+
+                    const project = ProjectEditor.getProject(bitmap);
+
+                    if (project.settings.general.lvglVersion == "9.0") {
+                        return true;
+                    }
+
+                    return project.settings.build.imageExportMode != "binary";
+                }
+            },
+            {
+                name: "lvglDither",
+                displayName: (bitmap: Bitmap) => "Dither image",
+                type: PropertyType.Boolean,
+                checkboxStyleSwitch: true,
+                disabled: (bitmap: Bitmap) => {
+                    if (isNotLVGLProject(bitmap)) {
+                        return true;
+                    }
+
+                    const project = ProjectEditor.getProject(bitmap);
+
+                    if (project.settings.general.lvglVersion == "9.0") {
+                        return true;
+                    }
+
+                    return false;
+                }
             },
             {
                 name: "style",
@@ -243,12 +290,18 @@ export class Bitmap extends EezObject {
                                 validators.required,
                                 validators.invalidCharacters("."),
                                 validators.unique({}, parent)
-                            ]
+                            ],
+                            visible: (values: any) => {
+                                return !(
+                                    values.imageFilePaths &&
+                                    values.imageFilePaths.length > 1
+                                );
+                            }
                         },
                         {
-                            name: "imageFilePath",
+                            name: "imageFilePaths",
                             displayName: "Image",
-                            type: AbsoluteFileInput,
+                            type: MultipleAbsoluteFileInput,
                             validators: [validators.required],
                             options: {
                                 filters: [
@@ -289,16 +342,46 @@ export class Bitmap extends EezObject {
                 }
             });
 
-            const name: string = result.values.name;
             const bpp: number = result.values.bpp;
 
-            return createBitmap(
-                projectStore,
-                result.values.imageFilePath,
-                undefined,
-                name,
-                bpp
-            );
+            if (result.values.imageFilePaths.length == 1) {
+                const name: string = result.values.name;
+
+                return createBitmap(
+                    projectStore,
+                    result.values.imageFilePaths[0],
+                    undefined,
+                    name,
+                    bpp
+                );
+            } else {
+                projectStore.undoManager.setCombineCommands(true);
+
+                for (let i = 0; i < result.values.imageFilePaths.length; i++) {
+                    const filePath = result.values.imageFilePaths[i];
+
+                    let name = getUniquePropertyValue(
+                        projectStore.project.bitmaps,
+                        "name",
+                        path.parse(filePath).name
+                    ) as string;
+
+                    const bitmap = await createBitmap(
+                        projectStore,
+                        filePath,
+                        undefined,
+                        name,
+                        bpp
+                    );
+                    if (bitmap) {
+                        projectStore.addObject(parent, bitmap);
+                    }
+                }
+
+                projectStore.undoManager.setCombineCommands(false);
+
+                return undefined;
+            }
         },
         icon: "material:image",
         afterLoadHook: (bitmap: Bitmap, project) => {
@@ -367,6 +450,14 @@ export class Bitmap extends EezObject {
                     }
                 });
             }
+
+            if (bitmap.lvglBinaryOutputFormat == undefined) {
+                bitmap.lvglBinaryOutputFormat = 3;
+            }
+
+            if (bitmap.lvglDither == undefined) {
+                bitmap.lvglDither = false;
+            }
         }
     };
 
@@ -387,7 +478,7 @@ export class Bitmap extends EezObject {
                 return getThemedColor(
                     getProjectStore(this),
                     style.backgroundColorProperty
-                );
+                ).colorValue;
             }
         }
         return "transparent";
@@ -587,6 +678,55 @@ export async function createBitmap(
         const bitmapProperties: Partial<Bitmap> = {
             name,
             image: `data:${fileType};base64,` + result,
+            bpp,
+            alwaysBuild: false
+        };
+
+        const bitmap = createObject<Bitmap>(
+            projectStore,
+            bitmapProperties,
+            Bitmap
+        );
+
+        return bitmap;
+    } catch (err) {
+        notification.error(err);
+        return undefined;
+    }
+}
+
+export async function createBitmapFromFile(
+    projectStore: ProjectStore,
+    file: File
+) {
+    let fileType = file.type;
+
+    if (file.type == undefined) {
+        const ext = path.extname(file.name).toLowerCase();
+        if (ext == ".jpg" || ext == ".jpeg") {
+            fileType = "image/jpg";
+        } else {
+            fileType = "image/png";
+        }
+    }
+
+    let bpp = projectStore.projectTypeTraits.isLVGL ? CF_TRUE_COLOR_ALPHA : 32;
+
+    let name = getUniquePropertyValue(
+        projectStore.project.bitmaps,
+        "name",
+        path.parse(file.name).name
+    ) as string;
+
+    try {
+        const arrayBuffer = await file.arrayBuffer();
+        const base64 = btoa(
+            String.fromCharCode.apply(null, new Uint8Array(arrayBuffer))
+        );
+
+        const bitmapProperties: Partial<Bitmap> = {
+            name,
+            image: `data:${fileType};base64,` + base64,
             bpp,
             alwaysBuild: false
         };

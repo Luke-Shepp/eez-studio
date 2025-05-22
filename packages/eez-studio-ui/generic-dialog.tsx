@@ -191,6 +191,9 @@ interface GenericDialogProps {
     onOk?: (result: GenericDialogResult) => Promise<boolean> | boolean | void;
     onCancel?: () => void;
     onValueChange?: (name: string, value: string) => void;
+    setOnChangeCallback?: (
+        onChange: (fieldProperties: any, value: any) => void
+    ) => void;
 }
 
 export const GenericDialog = observer(
@@ -234,6 +237,10 @@ export const GenericDialog = observer(
 
             this.fieldValues = fieldValues;
             this.errorMessages = undefined;
+
+            if (this.props.setOnChangeCallback) {
+                this.props.setOnChangeCallback(this.onChange);
+            }
         }
 
         get values() {
@@ -313,7 +320,7 @@ export const GenericDialog = observer(
             return true;
         }
 
-        onChange(fieldProperties: any, value: any) {
+        onChange = (fieldProperties: any, value: any) => {
             this.fieldValues[fieldProperties.name] = value;
 
             if (this.errorMessages) {
@@ -330,7 +337,7 @@ export const GenericDialog = observer(
             }
 
             this.progressType = "none";
-        }
+        };
 
         validate() {
             let errorMessages: any;
@@ -736,6 +743,9 @@ export function showGenericDialog(conf: {
     onOk?: (result: GenericDialogResult) => Promise<boolean>;
     opts?: IDialogOptions;
     dialogContext?: any;
+    setOnChangeCallback?: (
+        onChange: (fieldProperties: any, value: any) => void
+    ) => void;
 }) {
     return new Promise<GenericDialogResult>((resolve, reject) => {
         const [modalDialog] = showDialog(
@@ -774,6 +784,7 @@ export function showGenericDialog(conf: {
                     }
                     reject();
                 }}
+                setOnChangeCallback={conf.setOnChangeCallback}
             />,
             conf.opts
         );

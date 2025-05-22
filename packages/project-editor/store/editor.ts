@@ -3,9 +3,11 @@ import mobx from "mobx";
 import { observable, computed, action, autorun, runInAction } from "mobx";
 import * as FlexLayout from "flexlayout-react";
 
+import { objectEqual } from "eez-studio-shared/util";
+
 import { getParent, IEezObject } from "project-editor/core/object";
 import { ProjectEditor } from "project-editor/project-editor-interface";
-import {
+import type {
     IEditor,
     IEditorState
 } from "project-editor/project/ui/EditorComponent";
@@ -18,7 +20,6 @@ import {
     objectToString
 } from "project-editor/store/helper";
 import type { ProjectStore } from "project-editor/store";
-import { objectEqual } from "eez-studio-shared/util";
 import type { LVGLStyle } from "project-editor/lvgl/style";
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -224,10 +225,10 @@ export class EditorsStore {
             } else if (this.projectStore.project.readme) {
                 this.openEditor(this.projectStore.project.readme);
             } else if (
-                this.projectStore.project.pages &&
-                this.projectStore.project.pages.length > 0
+                this.projectStore.project.userPages &&
+                this.projectStore.project.userPages.length > 0
             ) {
-                this.openEditor(this.projectStore.project.pages[0]);
+                this.openEditor(this.projectStore.project.userPages[0]);
             } else {
                 this.openEditor(this.projectStore.project.settings);
             }
@@ -324,12 +325,15 @@ export class EditorsStore {
             if (
                 parentNode &&
                 parentNode instanceof FlexLayout.TabSetNode &&
-                ((!activeEditor && parentNode.getSelectedNode() == tab) ||
-                    (parentNode.isActive() &&
-                        parentNode.getSelectedNode() == tab))
+                (parentNode.isActive() || !this.activeEditor) &&
+                parentNode.getSelectedNode() == tab
             ) {
                 activeEditor = editor;
             }
+        }
+
+        if (!activeEditor && this.tabs.length) {
+            activeEditor = this.activeEditor;
         }
 
         this.tabIdToEditorMap = tabIdToEditorMap;
@@ -337,20 +341,36 @@ export class EditorsStore {
         this.saveState();
 
         setTimeout(() => {
-            runInAction(() => {
-                this.editors = editors;
-                this.activeEditor = activeEditor;
-            });
+            let changed =
+                this.activeEditor != activeEditor ||
+                this.editors.length != editors.length ||
+                this.editors.find((editor, i) => editors[i] != editor);
 
-            if (showActiveEditor) {
-                const activeEditor = this.activeEditor;
-                if (activeEditor) {
-                    activeEditor.makeActive();
-                    this.projectStore.navigationStore.showObjects(
-                        [activeEditor.subObject ?? activeEditor.object],
-                        false,
-                        false,
-                        true
+            if (changed) {
+                runInAction(() => {
+                    this.editors = editors;
+                    this.activeEditor = activeEditor;
+                });
+
+                if (showActiveEditor) {
+                    const activeEditor = this.activeEditor;
+                    if (activeEditor) {
+                        activeEditor.makeActive();
+                        this.projectStore.navigationStore.showObjects(
+                            [activeEditor.subObject ?? activeEditor.object],
+                            false,
+                            false,
+                            true
+                        );
+                    }
+                }
+
+                if (
+                    this.projectStore.navigationStore.selectedPanel instanceof
+                    ProjectEditor.FlowEditorClass
+                ) {
+                    this.projectStore.navigationStore.setSelectedPanel(
+                        undefined
                     );
                 }
             }

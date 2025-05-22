@@ -2,27 +2,24 @@ import React from "react";
 import { observable, action, runInAction, autorun, makeObservable } from "mobx";
 import { observer } from "mobx-react";
 import classNames from "classnames";
-import { dialog } from "@electron/remote";
+import { dialog, getCurrentWindow } from "@electron/remote";
 
 import { guid } from "eez-studio-shared/guid";
 import { humanize } from "eez-studio-shared/string";
-import { validators, filterNumber } from "eez-studio-shared/validation";
+import { filterNumber } from "eez-studio-shared/validation";
 
-import { showGenericDialog } from "eez-studio-ui/generic-dialog";
+import { confirm } from "eez-studio-ui/dialog-electron";
+
 import { Icon } from "eez-studio-ui/icon";
 
 import {
     PropertyType,
     PropertyProps,
-    getParent,
-    PropertyInfo,
-    IEezObject,
     getObjectPropertyDisplayName,
     isPropertyOptional,
     EnumItem
 } from "project-editor/core/object";
 import { info } from "project-editor/core/util";
-import { replaceObjectReference } from "project-editor/core/search";
 
 import { ConfigurationReferencesPropertyValue } from "project-editor/ui-components/ConfigurationReferencesPropertyValue";
 
@@ -37,6 +34,7 @@ import {
 } from "project-editor/flow/expression/ExpressionBuilder";
 
 import {
+    getEnumItems,
     getFormText,
     getObjectPropertyValue,
     getPropertyValue,
@@ -49,7 +47,8 @@ import { ProjectEditor } from "project-editor/project-editor-interface";
 import { Checkbox } from "./Checkbox";
 import { ImageProperty } from "./ImageProperty";
 
-import { isArray } from "eez-studio-shared/util";
+import { General } from "project-editor/project/project";
+import { UniqueValueInput } from "./UniqueValueInput";
 
 ////////////////////////////////////////////////////////////////////////////////
 
@@ -58,15 +57,17 @@ export const Property = observer(
         static contextType = ProjectContext;
         declare context: React.ContextType<typeof ProjectContext>;
 
-        textarea: HTMLDivElement | undefined;
+        textarea: HTMLTextAreaElement | undefined;
         input: HTMLInputElement;
         select: HTMLSelectElement;
 
         _value: any = undefined;
 
-        changeDocumentDisposer: any;
+        static propertyComponents: Property[] = [];
+        static resizeTextAreaInterval: any;
+        static resizePropertyComponentIndex = 0;
 
-        resizeObserver: ResizeObserver | undefined;
+        changeDocumentDisposer: any;
 
         disposeEventHandlers: (() => void) | undefined;
 
@@ -80,16 +81,56 @@ export const Property = observer(
             });
         }
 
-        resizeTextArea = () => {
-            if (this.textarea) {
-                this.textarea.style.height = "0";
-                this.textarea.style.height = this.textarea.scrollHeight + "px";
+        static resizeTextAreas() {
+            if (
+                Property.resizePropertyComponentIndex >=
+                Property.propertyComponents.length
+            ) {
+                Property.resizePropertyComponentIndex = 0;
             }
-        };
 
-        resizeObserverCallback = () => {
-            this.resizeTextArea();
-        };
+            const textarea =
+                Property.propertyComponents[
+                    Property.resizePropertyComponentIndex
+                ].textarea;
+
+            if (textarea) {
+                if (textarea.style.height != textarea.scrollHeight + "px") {
+                    textarea.style.height = "0";
+                    textarea.style.height = textarea.scrollHeight + "px";
+                }
+            }
+
+            Property.resizePropertyComponentIndex++;
+        }
+
+        static registerProperty(property: Property) {
+            if (property.textarea) {
+                if (Property.propertyComponents.indexOf(property) == -1) {
+                    if (Property.propertyComponents.length == 0) {
+                        Property.resizeTextAreaInterval = setInterval(
+                            Property.resizeTextAreas
+                        );
+                    }
+                    Property.propertyComponents.push(property);
+                }
+            } else {
+                Property.unregisterProperty(property);
+            }
+        }
+
+        static unregisterProperty(property: Property) {
+            const i = Property.propertyComponents.indexOf(property);
+            if (i != -1) {
+                Property.propertyComponents.splice(i, 1);
+
+                if (Property.propertyComponents.length == 0) {
+                    clearInterval(Property.resizeTextAreaInterval);
+                }
+            }
+        }
+
+        _lastValue: any;
 
         updateChangeDocumentObserver() {
             if (this.changeDocumentDisposer) {
@@ -97,15 +138,30 @@ export const Property = observer(
             }
 
             this.changeDocumentDisposer = autorun(() => {
+                const lastValue = this._lastValue;
+                this._lastValue = this._value;
+                if (!this.props.readOnly && this._value != lastValue) {
+                    return;
+                }
+
                 if (this.context.project) {
                     const getPropertyValueResult = getPropertyValue(
                         this.props.objects,
                         this.props.propertyInfo
                     );
+
+                    const value = getPropertyValueResult
+                        ? getPropertyValueResult.value
+                        : undefined;
+
+                    if (typeof value == "number") {
+                        if (value == filterNumber(this._value)) {
+                            return;
+                        }
+                    }
+
                     runInAction(() => {
-                        this._value = getPropertyValueResult
-                            ? getPropertyValueResult.value
-                            : undefined;
+                        this._value = value;
                     });
                 }
             });
@@ -158,13 +214,7 @@ export const Property = observer(
 
             this.addEventHandlers();
 
-            if (this.textarea) {
-                this.resizeTextArea();
-                this.resizeObserver = new ResizeObserver(
-                    this.resizeObserverCallback
-                );
-                this.resizeObserver.observe(this.textarea);
-            }
+            Property.registerProperty(this);
         }
 
         componentDidUpdate(prevProps: PropertyProps) {
@@ -177,9 +227,7 @@ export const Property = observer(
 
             this.addEventHandlers();
 
-            if (this.textarea) {
-                this.resizeTextArea();
-            }
+            Property.registerProperty(this);
         }
 
         componentWillUnmount() {
@@ -189,9 +237,7 @@ export const Property = observer(
                 this.disposeEventHandlers();
             }
 
-            if (this.resizeObserver) {
-                this.resizeObserver.disconnect();
-            }
+            Property.unregisterProperty(this);
         }
 
         onSelect = (event: React.MouseEvent<HTMLButtonElement, MouseEvent>) => {
@@ -200,6 +246,8 @@ export const Property = observer(
 
                 if (
                     this.props.propertyInfo.type == PropertyType.String ||
+                    this.props.propertyInfo.type ==
+                        PropertyType.NumberArrayAsString ||
                     this.props.propertyInfo.type ==
                         PropertyType.MultilineText ||
                     this.props.propertyInfo.type == PropertyType.ObjectReference
@@ -359,70 +407,6 @@ export const Property = observer(
             );
         };
 
-        onEditUnique = () => {
-            showGenericDialog({
-                dialogDefinition: {
-                    fields: [
-                        {
-                            name: this.props.propertyInfo.name,
-                            displayName: getObjectPropertyDisplayName(
-                                this.props.objects[0],
-                                this.props.propertyInfo
-                            ),
-                            type: "string",
-                            validators: [
-                                typeof this.props.propertyInfo.unique ===
-                                "boolean"
-                                    ? validators.unique(
-                                          this.props.objects[0],
-                                          getParent(this.props.objects[0])
-                                      )
-                                    : this.props.propertyInfo.unique!(
-                                          this.props.objects[0],
-                                          getParent(this.props.objects[0]),
-                                          this.props.propertyInfo
-                                      )
-                            ].concat(
-                                isPropertyOptional(
-                                    this.props.objects[0],
-                                    this.props.propertyInfo
-                                )
-                                    ? []
-                                    : [validators.required]
-                            )
-                        }
-                    ]
-                },
-                values: this.props.objects[0]
-            })
-                .then(result => {
-                    let oldValue = this._value;
-                    let newValue =
-                        result.values[this.props.propertyInfo.name].trim();
-                    if (newValue.length === 0) {
-                        newValue = undefined;
-                    }
-                    if (newValue != oldValue) {
-                        this.context.undoManager.setCombineCommands(true);
-
-                        runInAction(() => {
-                            replaceObjectReference(
-                                this.props.objects[0],
-                                newValue
-                            );
-                            this.changeValue(newValue);
-                        });
-
-                        this.context.undoManager.setCombineCommands(false);
-                    }
-                })
-                .catch(error => {
-                    if (error !== undefined) {
-                        console.error(error);
-                    }
-                });
-        };
-
         onGenerateGuid = () => {
             this.changeValue(guid());
         };
@@ -440,6 +424,9 @@ export const Property = observer(
                             !isNaN(newValue.value) &&
                             newValue.value.toString() !== this._value.toString()
                         ) {
+                            runInAction(() => {
+                                this._value = newValue.value.toString();
+                            });
                             this.props.updateObject({
                                 [this.props.propertyInfo.name]: newValue.value
                             });
@@ -450,6 +437,27 @@ export const Property = observer(
                 }
             }
         };
+
+        get displayValue() {
+            const { propertyInfo } = this.props;
+
+            if (!propertyInfo.displayValue) {
+                return this._value || "";
+            }
+
+            let displayValue = propertyInfo.displayValue(this.props.objects[0]);
+
+            for (let i = 1; i < this.props.objects.length; i++) {
+                if (
+                    displayValue !=
+                    propertyInfo.displayValue(this.props.objects[i])
+                ) {
+                    return "";
+                }
+            }
+
+            return displayValue;
+        }
 
         render() {
             const { propertyInfo, readOnly } = this.props;
@@ -490,38 +498,33 @@ export const Property = observer(
                 return (
                     <propertyInfo.propertyGridRowComponent {...this.props} />
                 );
+            } else if (propertyInfo.propertyGridFullRowComponent) {
+                return (
+                    <propertyInfo.propertyGridFullRowComponent
+                        {...this.props}
+                    />
+                );
             } else if (propertyInfo.propertyGridColumnComponent) {
                 return (
                     <propertyInfo.propertyGridColumnComponent {...this.props} />
                 );
             } else if (
                 propertyInfo.type === PropertyType.String &&
-                propertyInfo.unique
+                (propertyInfo.unique || propertyInfo.uniqueIdentifier)
             ) {
                 return (
-                    <div className="input-group">
-                        <input
-                            ref={(ref: any) => (this.input = ref)}
-                            type="text"
-                            className="form-control"
-                            value={this._value || ""}
-                            readOnly
-                        />
-                        <button
-                            className="btn btn-secondary"
-                            type="button"
-                            onClick={this.onEditUnique}
-                        >
-                            &hellip;
-                        </button>
-                    </div>
+                    <UniqueValueInput
+                        {...this.props}
+                        value={this._value}
+                        changeValue={this.changeValue}
+                    />
                 );
             } else if (propertyInfo.type === PropertyType.MultilineText) {
                 if (!readOnly && isOnSelectAvailable) {
                     const formText = getFormText(this.props);
 
                     return (
-                        <>
+                        <div style={{ width: "100%" }}>
                             <div
                                 className="input-group"
                                 title={this._value || ""}
@@ -539,11 +542,6 @@ export const Property = observer(
                                         overflowY: "hidden"
                                     }}
                                     readOnly={propertyInfo.computed}
-                                    spellCheck={
-                                        propertyInfo.disableSpellcheck
-                                            ? false
-                                            : true
-                                    }
                                 />
                                 <button
                                     className="btn btn-secondary"
@@ -559,7 +557,7 @@ export const Property = observer(
                             {formText && (
                                 <div className="form-text">{formText}</div>
                             )}
-                        </>
+                        </div>
                     );
                 } else {
                     return (
@@ -572,9 +570,6 @@ export const Property = observer(
                             onChange={this.onChange}
                             style={{ resize: "none", overflowY: "hidden" }}
                             readOnly={readOnly || propertyInfo.computed}
-                            spellCheck={
-                                propertyInfo.disableSpellcheck ? false : true
-                            }
                         />
                     );
                 }
@@ -686,6 +681,7 @@ export const Property = observer(
                             className="form-control"
                             value={value || ""}
                             readOnly
+                            onClick={this.props.onClick}
                         />
                     );
                 } else {
@@ -741,9 +737,7 @@ export const Property = observer(
                             onChange={this.onChange}
                             style={{ resize: "none", overflowY: "hidden" }}
                             readOnly={readOnly || propertyInfo.computed}
-                            spellCheck={
-                                propertyInfo.disableSpellcheck ? false : true
-                            }
+                            onClick={this.props.onClick}
                         />
                     );
                 } else {
@@ -766,11 +760,6 @@ export const Property = observer(
                                         overflowY: "hidden"
                                     }}
                                     readOnly={propertyInfo.computed}
-                                    spellCheck={
-                                        propertyInfo.disableSpellcheck
-                                            ? false
-                                            : true
-                                    }
                                 />
                                 <button
                                     className="btn btn-secondary"
@@ -821,7 +810,23 @@ export const Property = observer(
                 return (
                     <Checkbox
                         state={checkboxState}
-                        onChange={value => this.changeValue(value)}
+                        onChange={value => {
+                            if (
+                                propertyInfo.name == "flowSupport" &&
+                                this.props.objects[0] instanceof General &&
+                                value == false
+                            ) {
+                                confirm(
+                                    "Are you sure?",
+                                    "If flow support is turned off then all your flow specific parts will be removed from the project and after saving the project it will irreversibly lost.",
+                                    () => {
+                                        this.changeValue(value);
+                                    }
+                                );
+                            } else {
+                                this.changeValue(value);
+                            }
+                        }}
                         readOnly={readOnly}
                         switchStyle={propertyInfo.checkboxStyleSwitch}
                         label={
@@ -858,7 +863,10 @@ export const Property = observer(
                         )}
                     </div>
                 );
-            } else if (propertyInfo.type === PropertyType.String) {
+            } else if (
+                propertyInfo.type === PropertyType.String ||
+                propertyInfo.type == PropertyType.NumberArrayAsString
+            ) {
                 if (!readOnly && isOnSelectAvailable) {
                     return (
                         <div className="input-group" title={this._value || ""}>
@@ -885,31 +893,45 @@ export const Property = observer(
                         </div>
                     );
                 } else {
+                    const formText = getFormText(this.props);
                     return (
-                        <input
-                            ref={(ref: any) => (this.input = ref)}
-                            type="text"
-                            className={classNames("form-control", {
-                                "font-monospace": propertyInfo.monospaceFont
-                            })}
-                            value={this._value || ""}
-                            onChange={this.onChange}
-                            onKeyDown={this.onKeyDown}
-                            readOnly={readOnly || propertyInfo.computed}
-                        />
+                        <div style={{ width: "100%" }}>
+                            <input
+                                ref={(ref: any) => (this.input = ref)}
+                                type="text"
+                                className={classNames("form-control", {
+                                    "font-monospace": propertyInfo.monospaceFont
+                                })}
+                                value={this.displayValue}
+                                onChange={this.onChange}
+                                onKeyDown={this.onKeyDown}
+                                readOnly={readOnly || propertyInfo.computed}
+                            />
+                            {formText && (
+                                <div className="form-text">{formText}</div>
+                            )}
+                        </div>
                     );
                 }
             } else if (propertyInfo.type === PropertyType.Number) {
+                const formText = getFormText(this.props);
+
                 return (
-                    <input
-                        ref={(ref: any) => (this.input = ref)}
-                        type="text"
-                        className="form-control"
-                        value={this._value != undefined ? this._value : ""}
-                        onChange={this.onChange}
-                        onKeyDown={this.onKeyDown}
-                        readOnly={readOnly}
-                    />
+                    <div style={{ width: "100%" }}>
+                        <input
+                            ref={(ref: any) => (this.input = ref)}
+                            type="text"
+                            className="form-control"
+                            value={this._value != undefined ? this._value : ""}
+                            onChange={this.onChange}
+                            onKeyDown={this.onKeyDown}
+                            readOnly={readOnly}
+                            onClick={this.props.onClick}
+                        />
+                        {formText && (
+                            <div className="form-text">{formText}</div>
+                        )}
+                    </div>
                 );
             } else if (propertyInfo.type === PropertyType.Color) {
                 return (
@@ -929,6 +951,7 @@ export const Property = observer(
                         value={this._value || ""}
                         onChange={this.changeValue}
                         readOnly={readOnly}
+                        onClick={this.props.onClick}
                     />
                 );
             } else if (propertyInfo.type === PropertyType.Array) {
@@ -964,7 +987,8 @@ export const Property = observer(
                             type="text"
                             className="form-control"
                             value={this._value || ""}
-                            readOnly
+                            onChange={this.onChange}
+                            readOnly={readOnly}
                         />
                         {!readOnly && (
                             <>
@@ -975,11 +999,14 @@ export const Property = observer(
                                     onClick={async () => {
                                         if (this.context.filePath) {
                                             const result =
-                                                await dialog.showOpenDialog({
-                                                    properties: [
-                                                        "openDirectory"
-                                                    ]
-                                                });
+                                                await dialog.showOpenDialog(
+                                                    getCurrentWindow(),
+                                                    {
+                                                        properties: [
+                                                            "openDirectory"
+                                                        ]
+                                                    }
+                                                );
 
                                             const filePaths = result.filePaths;
                                             if (filePaths && filePaths[0]) {
@@ -1024,7 +1051,8 @@ export const Property = observer(
                             type="text"
                             className="form-control"
                             value={this._value || ""}
-                            readOnly
+                            onChange={this.onChange}
+                            readOnly={readOnly}
                         />
                         {!readOnly && (
                             <>
@@ -1035,11 +1063,16 @@ export const Property = observer(
                                     onClick={async () => {
                                         if (this.context.filePath) {
                                             const result =
-                                                await dialog.showOpenDialog({
-                                                    properties: ["openFile"],
-                                                    filters:
-                                                        propertyInfo.fileFilters
-                                                });
+                                                await dialog.showOpenDialog(
+                                                    getCurrentWindow(),
+                                                    {
+                                                        properties: [
+                                                            "openFile"
+                                                        ],
+                                                        filters:
+                                                            propertyInfo.fileFilters
+                                                    }
+                                                );
 
                                             const filePaths = result.filePaths;
                                             if (filePaths && filePaths[0]) {
@@ -1093,56 +1126,4 @@ function arrayCompareShallow(arr1: any, arr2: any) {
     }
 
     return true;
-}
-
-function getEnumItems(objects: IEezObject[], propertyInfo: PropertyInfo) {
-    if (!propertyInfo.enumItems) {
-        return [];
-    }
-
-    if (isArray(propertyInfo.enumItems)) {
-        return propertyInfo.enumItems;
-    }
-
-    const enumItems = propertyInfo.enumItems;
-
-    const enumItemsArray = objects.map(object => enumItems(object));
-
-    const result = [];
-
-    for (let enumItems1 of enumItemsArray) {
-        for (let enumItem1 of enumItems1) {
-            let foundInAll = true;
-
-            for (let enumItems2 of enumItemsArray) {
-                let found = false;
-                for (let enumItem2 of enumItems2) {
-                    if (enumItem1.id == enumItem2.id) {
-                        found = true;
-                        break;
-                    }
-                }
-
-                if (!found) {
-                    foundInAll = false;
-                    break;
-                }
-            }
-
-            if (foundInAll) {
-                let found = false;
-                for (let enumItem2 of result) {
-                    if (enumItem1.id == enumItem2.id) {
-                        found = true;
-                        break;
-                    }
-                }
-                if (!found) {
-                    result.push(enumItem1);
-                }
-            }
-        }
-    }
-
-    return result;
 }

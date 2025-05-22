@@ -100,7 +100,8 @@ export const Canvas = observer(
         pageRect?: Rect;
     }> {
         div: HTMLDivElement;
-        resizeObserver: ResizeObserver;
+        updateClientRectRequestAnimationFrameId: any;
+        setOverflowTimeout: any;
         deltaY = 0;
 
         buttonsAtDown: number;
@@ -117,10 +118,6 @@ export const Canvas = observer(
                 onDragStart: action.bound,
                 onDragEnd: action.bound
             });
-
-            this.resizeObserver = new ResizeObserver(
-                this.resizeObserverCallback
-            );
         }
 
         _mouseHandler: IMouseHandler | undefined;
@@ -133,8 +130,7 @@ export const Canvas = observer(
             });
         }
 
-        _setOverflowTimeout: any;
-        resizeObserverCallback = () => {
+        updateClientRect = () => {
             if ($(this.div).is(":visible")) {
                 const transform = this.props.flowContext.viewState.transform;
 
@@ -148,18 +144,20 @@ export const Canvas = observer(
                         clientRect.height !== transform.clientRect.height)
                 ) {
                     if (
+                        this.props.flowContext.projectStore.projectTypeTraits
+                            .isDashboard &&
                         this.props.flowContext.projectStore.runtime &&
                         !this.props.flowContext.projectStore.runtime
                             .isDebuggerActive
                     ) {
                         // set overflow to hidden and back to auto after timeout
-                        if (this._setOverflowTimeout) {
-                            clearTimeout(this._setOverflowTimeout);
-                            this._setOverflowTimeout = undefined;
+                        if (this.setOverflowTimeout) {
+                            clearTimeout(this.setOverflowTimeout);
+                            this.setOverflowTimeout = undefined;
                         }
                         this.div.style.overflow = "hidden";
-                        this._setOverflowTimeout = setTimeout(() => {
-                            this._setOverflowTimeout = undefined;
+                        this.setOverflowTimeout = setTimeout(() => {
+                            this.setOverflowTimeout = undefined;
                             this.div.style.overflow = "auto";
                         }, 100);
                     }
@@ -169,6 +167,9 @@ export const Canvas = observer(
                     });
                 }
             }
+
+            this.updateClientRectRequestAnimationFrameId =
+                requestAnimationFrame(this.updateClientRect);
         };
 
         componentDidMount() {
@@ -183,13 +184,7 @@ export const Canvas = observer(
                 passive: false
             });
 
-            if (this.div) {
-                this.resizeObserver.observe(this.div);
-            }
-        }
-
-        componentDidUpdate() {
-            this.resizeObserverCallback();
+            this.updateClientRect();
         }
 
         componentWillUnmount() {
@@ -197,18 +192,16 @@ export const Canvas = observer(
 
             this.div.removeEventListener("wheel", this.onWheel);
 
-            if (this.div) {
-                this.resizeObserver.unobserve(this.div);
-            }
+            cancelAnimationFrame(this.updateClientRectRequestAnimationFrameId);
 
-            if (this._setOverflowTimeout) {
-                clearTimeout(this._setOverflowTimeout);
-                this._setOverflowTimeout = undefined;
+            if (this.setOverflowTimeout) {
+                clearTimeout(this.setOverflowTimeout);
+                this.setOverflowTimeout = undefined;
             }
         }
 
         onWheel = (event: WheelEvent) => {
-            if (event.buttons === 4 || this.props.flowContext.frontFace) {
+            if (event.buttons === 4) {
                 // do nothing if mouse wheel is pressed, i.e. pan will be activated in onMouseDown
                 return;
             }
@@ -242,13 +235,20 @@ export const Canvas = observer(
                         ((y - transform.translate.y) * scale) / transform.scale;
 
                     transform.scale = scale;
-                    transform.translate = { x: tx, y: ty };
+
+                    if (!this.props.flowContext.frontFace) {
+                        transform.translate = { x: tx, y: ty };
+                    }
 
                     runInAction(() => {
                         this.props.flowContext.viewState.transform = transform;
                     });
                 }
             } else {
+                if (this.props.flowContext.frontFace) {
+                    return;
+                }
+
                 transform.translate = {
                     x:
                         transform.translate.x -
@@ -305,7 +305,7 @@ export const Canvas = observer(
             this.buttonsAtDown = event.buttons;
 
             if (this.mouseHandler) {
-                this.mouseHandler.up(this.props.flowContext);
+                this.mouseHandler.up(this.props.flowContext, true);
                 this.mouseHandler = undefined;
             }
 
@@ -322,7 +322,8 @@ export const Canvas = observer(
                     movementX: event.movementX ?? 0,
                     movementY: event.movementY ?? 0,
                     ctrlKey: event.ctrlKey,
-                    shiftKey: event.shiftKey
+                    shiftKey: event.shiftKey,
+                    timeStamp: event.timeStamp
                 };
 
                 this.mouseHandler.down(this.props.flowContext, event);
@@ -345,18 +346,19 @@ export const Canvas = observer(
                         ? this.mouseHandler.lastPointerEvent.movementY
                         : 0,
                     ctrlKey: event.ctrlKey,
-                    shiftKey: event.shiftKey
+                    shiftKey: event.shiftKey,
+                    timeStamp: event.timeStamp
                 };
 
                 this.mouseHandler.move(this.props.flowContext, event);
             }
         };
 
-        onDragEnd(event: PointerEvent) {
+        onDragEnd(event: PointerEvent, cancel: boolean) {
             let preventContextMenu = false;
 
             if (this.mouseHandler) {
-                this.mouseHandler.up(this.props.flowContext);
+                this.mouseHandler.up(this.props.flowContext, cancel);
 
                 if (this.mouseHandler instanceof PanMouseHandler) {
                     if (pointDistance(this.mouseHandler.totalMovement) > 10) {
@@ -445,7 +447,10 @@ export const Canvas = observer(
                         );
                         if (menu) {
                             if (this.mouseHandler) {
-                                this.mouseHandler.up(this.props.flowContext);
+                                this.mouseHandler.up(
+                                    this.props.flowContext,
+                                    true
+                                );
                                 this.mouseHandler = undefined;
                             }
 
@@ -528,6 +533,7 @@ export const Canvas = observer(
             }
 
             const lvglCreateInProgress =
+                !runtime.isStopped &&
                 this.props.flowContext.flowState &&
                 this.props.flowContext.flowState.flow instanceof
                     ProjectEditor.PageClass &&
@@ -599,6 +605,10 @@ export const FlowViewer = observer(
                 "ensure-selection-visible",
                 this.ensureSelectionVisible
             );
+
+            if (this.context.navigationStore) {
+                this.context.navigationStore.mountPanel(this);
+            }
         }
 
         componentDidCatch(error: any, info: any) {
@@ -610,9 +620,10 @@ export const FlowViewer = observer(
                 "ensure-selection-visible",
                 this.ensureSelectionVisible
             );
+
             setTimeout(() => {
-                if (this.context.navigationStore?.selectedPanel === this) {
-                    this.context.navigationStore.setSelectedPanel(undefined);
+                if (this.context.navigationStore) {
+                    this.context.navigationStore.unmountPanel(this);
                 }
             });
         }
@@ -648,8 +659,8 @@ export const FlowViewer = observer(
                         return;
                     }
 
-                    canvasEl.style.transition = "transform 0.2s";
-                    selectionEl.style.display = "none";
+                    // canvasEl.style.transition = "transform 0.2s";
+                    // selectionEl.style.display = "none";
 
                     let dx = 0;
                     let dy = 0;
@@ -687,10 +698,10 @@ export const FlowViewer = observer(
                             dy * this.flowContext.viewState.transform.scale
                     };
 
-                    setTimeout(() => {
-                        canvasEl.style.transition = "";
-                        selectionEl.style.display = "block";
-                    }, 200);
+                    // setTimeout(() => {
+                    //     canvasEl.style.transition = "";
+                    //     selectionEl.style.display = "block";
+                    // }, 200);
                 }
 
                 this.props.tabState.onEnsureSelectionVisibleIsDone();
@@ -705,10 +716,6 @@ export const FlowViewer = observer(
         get selectedObjects() {
             return this.props.tabState.widgetContainer.selectedObjects;
         }
-        cutSelection() {}
-        copySelection() {}
-        pasteSelection() {}
-        deleteSelection() {}
         onFocus = () => {
             this.context.navigationStore?.setSelectedPanel(this);
         };

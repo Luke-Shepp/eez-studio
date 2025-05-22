@@ -1,6 +1,6 @@
 import { observer } from "mobx-react";
 import React from "react";
-import { computed, makeObservable } from "mobx";
+import { computed, makeObservable, observable } from "mobx";
 import * as FlexLayout from "flexlayout-react";
 
 import { FlexLayoutContainer } from "eez-studio-ui/FlexLayout";
@@ -11,7 +11,9 @@ import {
     addItem,
     canAdd,
     createObject,
+    getAddItemName,
     getAncestorOfType,
+    IPanel,
     LayoutModels
 } from "project-editor/store";
 
@@ -52,7 +54,7 @@ const ProjectFeature = observer(
         static contextType = ProjectContext;
         declare context: React.ContextType<typeof ProjectContext>;
 
-        onAdd() {
+        onAdd = () => {
             let newFeatureObject = createObject(
                 this.context,
                 this.props.projectFeature.create(),
@@ -67,9 +69,9 @@ const ProjectFeature = observer(
             this.context.updateObject(this.context.project, changes);
 
             this.context.project.enableTabs();
-        }
+        };
 
-        onRemove() {
+        onRemove = () => {
             confirm(
                 "Are you sure you want to remove this feature?",
                 undefined,
@@ -94,7 +96,7 @@ const ProjectFeature = observer(
                     }
                 }
             );
-        }
+        };
 
         render() {
             let button: JSX.Element | undefined;
@@ -144,7 +146,7 @@ const ProjectFeature = observer(
                     button = (
                         <button
                             className="btn btn-secondary float-right"
-                            onClick={this.onRemove.bind(this)}
+                            onClick={this.onRemove}
                             title="Remove feature from the project"
                         >
                             Remove
@@ -155,7 +157,7 @@ const ProjectFeature = observer(
                 button = (
                     <button
                         className="btn btn-success float-right"
-                        onClick={this.onAdd.bind(this)}
+                        onClick={this.onAdd}
                         title="Add feature to the project"
                     >
                         Add
@@ -249,7 +251,11 @@ export const SettingsEditor = observer(
             var component = node.getComponent();
 
             if (component === "navigation") {
-                return <SettingsNavigation />;
+                return (
+                    <SettingsNavigation
+                        selectedObject={this.props.editor.subObject}
+                    />
+                );
             }
 
             if (component === "content") {
@@ -422,6 +428,7 @@ export const SettingsContent = observer(
                                 extension.key == "variables" ||
                                 extension.key == "styles" ||
                                 extension.key == "lvglStyles" ||
+                                extension.key == "lvglGroups" ||
                                 extension.key == "fonts" ||
                                 extension.key == "bitmaps" ||
                                 extension.key == "texts" ||
@@ -430,7 +437,10 @@ export const SettingsContent = observer(
                                 return false;
                             }
                         } else {
-                            if (extension.key == "lvglStyles") {
+                            if (
+                                extension.key == "lvglStyles" ||
+                                extension.key == "lvglGroups"
+                            ) {
                                 return false;
                             }
                         }
@@ -478,7 +488,12 @@ export const SettingsContent = observer(
 ////////////////////////////////////////////////////////////////////////////////
 
 export const SettingsNavigation = observer(
-    class SettingsNavigation extends React.Component {
+    class SettingsNavigation
+        extends React.Component<{
+            selectedObject: IEezObject | undefined;
+        }>
+        implements IPanel
+    {
         static contextType = ProjectContext;
         declare context: React.ContextType<typeof ProjectContext>;
 
@@ -493,6 +508,8 @@ export const SettingsNavigation = observer(
 
         componentDidMount() {
             this.treeAdapter.selectItem(this.treeAdapter.allRows[0].item);
+
+            this.context.navigationStore.mountPanel(this);
         }
 
         static navigationTreeFilter(object: IEezObject) {
@@ -502,9 +519,13 @@ export const SettingsNavigation = observer(
             return true;
         }
 
-        onFocus() {
-            this.context.navigationStore.setSelectedPanel(undefined);
+        componentWillUnmount() {
+            this.context.navigationStore.unmountPanel(this);
         }
+
+        onFocus = () => {
+            this.context.navigationStore.setSelectedPanel(this);
+        };
 
         onClick = (object: IEezObject) => {
             this.context.editorsStore.openEditor(
@@ -524,12 +545,51 @@ export const SettingsNavigation = observer(
         get treeAdapter() {
             return new TreeAdapter(
                 this.navigationObjectAdapter,
-                undefined,
+                observable.box<IEezObject | undefined>(
+                    this.props.selectedObject
+                ),
                 SettingsNavigation.navigationTreeFilter,
                 true,
                 "none",
                 undefined,
                 this.onClick
+            );
+        }
+
+        // interface IPanel implementation
+        get selectedObject() {
+            return this.treeAdapter.rootItem.selectedObject;
+        }
+        get selectedObjects() {
+            return this.treeAdapter.rootItem.selectedObjects;
+        }
+        canCut() {
+            return this.treeAdapter.canCut();
+        }
+        cutSelection() {
+            this.treeAdapter.cutSelection();
+        }
+        canCopy() {
+            return this.treeAdapter.canCopy();
+        }
+        copySelection() {
+            this.treeAdapter.copySelection();
+        }
+        canPaste() {
+            return this.treeAdapter.canPaste();
+        }
+        pasteSelection() {
+            this.treeAdapter.pasteSelection();
+        }
+        canDelete() {
+            return this.treeAdapter.canDelete();
+        }
+        deleteSelection() {
+            this.treeAdapter.deleteSelection();
+        }
+        selectAll() {
+            this.treeAdapter.selectItems(
+                this.treeAdapter.allRows.map(row => row.item)
             );
         }
 
@@ -562,10 +622,12 @@ export const SettingsNavigation = observer(
                                 )
                             }
                             tabIndex={0}
-                            onFocus={this.onFocus.bind(this)}
+                            onFocus={this.onFocus}
                         />
                     }
                     style={{ overflow: "hidden" }}
+                    tabIndex={0}
+                    onFocus={this.onFocus}
                 />
             );
         }
@@ -578,7 +640,7 @@ const AddButton = observer(
     class AddButton extends React.Component<{
         objectAdapter: TreeObjectAdapter;
     }> {
-        async onAdd() {
+        onAdd = async () => {
             if (this.props.objectAdapter.selectedObject) {
                 const aNewItem = await addItem(
                     this.props.objectAdapter.selectedObject
@@ -587,20 +649,21 @@ const AddButton = observer(
                     this.props.objectAdapter.selectObject(aNewItem);
                 }
             }
-        }
+        };
 
         render() {
             return (
-                <IconAction
-                    title="Add Item"
-                    icon="material:add"
-                    iconSize={16}
-                    onClick={this.onAdd.bind(this)}
-                    enabled={
-                        this.props.objectAdapter.selectedObject &&
-                        canAdd(this.props.objectAdapter.selectedObject)
-                    }
-                />
+                this.props.objectAdapter.selectedObject &&
+                canAdd(this.props.objectAdapter.selectedObject) && (
+                    <IconAction
+                        title={`Add ${getAddItemName(
+                            this.props.objectAdapter.selectedObject
+                        )}...`}
+                        icon="material:add"
+                        iconSize={16}
+                        onClick={this.onAdd}
+                    />
+                )
             );
         }
     }
@@ -612,9 +675,9 @@ const DeleteButton = observer(
     class DeleteButton extends React.Component<{
         objectAdapter: TreeObjectAdapter;
     }> {
-        onDelete() {
+        onDelete = () => {
             this.props.objectAdapter.deleteSelection();
-        }
+        };
 
         render() {
             return (
@@ -622,7 +685,7 @@ const DeleteButton = observer(
                     title="Delete Selected Item"
                     icon="material:delete"
                     iconSize={16}
-                    onClick={this.onDelete.bind(this)}
+                    onClick={this.onDelete}
                     enabled={this.props.objectAdapter.canDelete()}
                 />
             );

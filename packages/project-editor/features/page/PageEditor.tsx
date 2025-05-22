@@ -1,5 +1,5 @@
 import React from "react";
-import { computed, runInAction, observable, makeObservable } from "mobx";
+import { computed, runInAction, makeObservable, observable } from "mobx";
 import { observer } from "mobx-react";
 import { IEezObject } from "project-editor/core/object";
 import { TreeObjectAdapter } from "project-editor/core/objectAdapter";
@@ -29,7 +29,8 @@ export const PageEditor = observer(
         render() {
             return this.pageTabState.isRuntime ? (
                 <FlowViewer tabState={this.pageTabState} />
-            ) : this.pageTabState.timeline.isEditorActive ? (
+            ) : this.context.projectTypeTraits.hasFlowSupport &&
+              this.pageTabState.timeline.isEditorActive ? (
                 <Splitter
                     type="vertical"
                     sizes="65%|35%"
@@ -91,11 +92,12 @@ export class PageTabState extends FlowTabState {
         this._timeline = value;
     }
 
-    constructor(object: IEezObject) {
+    constructor(object: IEezObject, transform?: Transform) {
         super(object as Flow);
 
         makeObservable(this, {
             _transform: observable,
+            transform: computed,
             frontFace: computed
         });
 
@@ -109,7 +111,11 @@ export class PageTabState extends FlowTabState {
             false
         );
 
-        this.resetTransform(this.transform);
+        if (transform) {
+            this._transform = transform;
+        } else {
+            this.resetTransform(this.transform);
+        }
 
         this.timeline = new PageTimelineEditorState(this);
 
@@ -149,13 +155,38 @@ export class PageTabState extends FlowTabState {
     }
 
     get transform() {
+        if (!this.isRuntime && this.projectStore.uiStateStore.globalFlowZoom) {
+            this._transform.scale = this.projectStore.uiStateStore.flowZoom;
+        }
         return this._transform;
     }
 
     set transform(transform: Transform) {
         runInAction(() => {
             this._transform = transform;
+            if (
+                !this.isRuntime &&
+                this.projectStore.uiStateStore.globalFlowZoom
+            ) {
+                this.projectStore.uiStateStore.flowZoom = transform.scale;
+            }
         });
+    }
+
+    resetTransform(transform?: Transform) {
+        if (!transform) {
+            if (this.projectStore.uiStateStore.globalFlowZoom) {
+                this.projectStore.uiStateStore.flowZoom = 1;
+            }
+
+            transform = this.transform;
+        }
+
+        transform.scale = 1;
+        transform.translate = {
+            x: -this.flow.pageRect.width / 2,
+            y: -this.flow.pageRect.height / 2
+        };
     }
 
     loadState() {
@@ -182,7 +213,9 @@ export class PageTabState extends FlowTabState {
                     x: state.transform.translate.x ?? 0,
                     y: state.transform.translate.y ?? 0
                 },
-                scale: state.transform.scale ?? 1
+                scale: this.projectStore.uiStateStore.globalFlowZoom
+                    ? this.projectStore.uiStateStore.flowZoom
+                    : state.transform.scale ?? 1
             });
         }
 
@@ -200,10 +233,10 @@ export class PageTabState extends FlowTabState {
             selection: this.widgetContainer.saveState(),
             transform: {
                 translate: {
-                    x: this._transform.translate.x,
-                    y: this._transform.translate.y
+                    x: this.transform.translate.x,
+                    y: this.transform.translate.y
                 },
-                scale: this._transform.scale
+                scale: this.transform.scale
             },
             timeline: this.timeline.saveState()
         };

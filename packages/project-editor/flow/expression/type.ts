@@ -85,13 +85,15 @@ export function findValueTypeInExpressionNode(
 
         if (component) {
             const flow = ProjectEditor.getFlow(component);
-            let localVariable = flow.localVariables.find(
-                localVariable => localVariable.name == node.name
-            );
-            if (localVariable) {
-                node.valueType = getType(project, localVariable.type);
-                node.identifierType = "local-variable";
-                return;
+            if (flow) {
+                let localVariable = flow.userPropertiesAndLocalVariables.find(
+                    localVariable => localVariable.name == node.name
+                );
+                if (localVariable) {
+                    node.valueType = getType(project, localVariable.type);
+                    node.identifierType = "local-variable";
+                    return;
+                }
             }
         }
 
@@ -485,7 +487,9 @@ export function findValueTypeInExpressionNode(
                 assignable
             )
         );
-        node.valueType = `struct:any`;
+        node.valueType = project.projectTypeTraits.isDashboard
+            ? "json"
+            : "struct:any";
     } else {
         throw `Unknown expression node "${node.type}"`;
     }

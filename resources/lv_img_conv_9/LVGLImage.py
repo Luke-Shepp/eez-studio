@@ -104,8 +104,8 @@ class CompressMethod(Enum):
 
 class ColorFormat(Enum):
     UNKNOWN = 0x00
-    TRUECOLOR = 0x04
-    TRUECOLOR_ALPHA = 0x05
+    RAW = 0x01,
+    RAW_ALPHA = 0x02,
     L8 = 0x06
     I1 = 0x07
     I2 = 0x08
@@ -118,6 +118,7 @@ class ColorFormat(Enum):
     ARGB8888 = 0x10
     XRGB8888 = 0x11
     RGB565 = 0x12
+    ARGB8565 = 0x13
     RGB565A8 = 0x14
     RGB888 = 0x0F
 
@@ -127,7 +128,6 @@ class ColorFormat(Enum):
         Return bit per pixel for this cf
         """
         cf_map = {
-            ColorFormat.UNKNOWN: 0x00,
             ColorFormat.L8: 8,
             ColorFormat.I1: 1,
             ColorFormat.I2: 2,
@@ -141,12 +141,11 @@ class ColorFormat(Enum):
             ColorFormat.XRGB8888: 32,
             ColorFormat.RGB565: 16,
             ColorFormat.RGB565A8: 16,  # 16bpp + a8 map
+            ColorFormat.ARGB8565: 24,
             ColorFormat.RGB888: 24,
-            ColorFormat.TRUECOLOR: 32,
-            ColorFormat.TRUECOLOR_ALPHA: 32,
         }
 
-        return cf_map[self]
+        return cf_map[self] if self in cf_map else 0
 
     @property
     def ncolors(self) -> int:
@@ -176,23 +175,38 @@ class ColorFormat(Enum):
 
     @property
     def has_alpha(self) -> bool:
-        return self.is_alpha_only or self in (
+        return self.is_alpha_only or self.is_indexed or self in (
             ColorFormat.ARGB8888,
             ColorFormat.XRGB8888,  # const alpha: 0xff
-            ColorFormat.TRUECOLOR,  # const alpha: 0xff
-            ColorFormat.TRUECOLOR_ALPHA,
+            ColorFormat.ARGB8565,
             ColorFormat.RGB565A8)
 
     @property
     def is_colormap(self) -> bool:
         return self in (ColorFormat.ARGB8888, ColorFormat.RGB888,
                         ColorFormat.XRGB8888, ColorFormat.RGB565A8,
-                        ColorFormat.RGB565, ColorFormat.TRUECOLOR_ALPHA,
-                        ColorFormat.TRUECOLOR)
+                        ColorFormat.ARGB8565, ColorFormat.RGB565)
 
     @property
     def is_luma_only(self) -> bool:
-        return self in (ColorFormat.L8,)
+        return self in (ColorFormat.L8, )
+
+
+def bit_extend(value, bpp):
+    """
+    Extend value from bpp to 8 bit with interpolation to reduce rounding error.
+    """
+
+    if value == 0:
+        return 0
+
+    res = value
+    bpp_now = bpp
+    while bpp_now < 8:
+        res |= value << (8 - bpp_now)
+        bpp_now += bpp
+
+    return res
 
 
 def unpack_colors(data: bytes, cf: ColorFormat, w) -> List:
@@ -241,14 +255,10 @@ def unpack_colors(data: bytes, cf: ColorFormat, w) -> List:
         pixels = [(data[2 * i + 1] << 8) | data[2 * i]
                   for i in range(len(data) // 2)]
 
-        values_5bit = [x * 8 for x in range(32)]
-        values_5bit[-1] = 255
-        values_6bit = [x * 4 for x in range(64)]
-        values_6bit[-1] = 255
         for p in pixels:
-            ret.append(values_5bit[(p >> 11) & 0x1f])  # R
-            ret.append(values_6bit[(p >> 5) & 0x3f])  # G
-            ret.append(values_5bit[(p >> 0) & 0x1f])  # B
+            ret.append(bit_extend((p >> 11) & 0x1f, 5))  # R
+            ret.append(bit_extend((p >> 5) & 0x3f, 6))  # G
+            ret.append(bit_extend((p >> 0) & 0x1f, 5))  # B
     elif bpp == 24:
         if cf == ColorFormat.RGB888:
             B = data[0::3]
@@ -263,15 +273,23 @@ def unpack_colors(data: bytes, cf: ColorFormat, w) -> List:
             pixels = [(pixel_data[2 * i + 1] << 8) | pixel_data[2 * i]
                       for i in range(len(pixel_data) // 2)]
 
-            values_5bit = [x * 8 for x in range(32)]
-            values_5bit[-1] = 255
-            values_6bit = [x * 4 for x in range(64)]
-            values_6bit[-1] = 255
             for a, p in zip(pixel_alpha, pixels):
-                ret.append(values_5bit[(p >> 11) & 0x1f])  # R
-                ret.append(values_6bit[(p >> 5) & 0x3f])  # G
-                ret.append(values_5bit[(p >> 0) & 0x1f])  # B
+                ret.append(bit_extend((p >> 11) & 0x1f, 5))  # R
+                ret.append(bit_extend((p >> 5) & 0x3f, 6))  # G
+                ret.append(bit_extend((p >> 0) & 0x1f, 5))  # B
                 ret.append(a)
+        elif cf == ColorFormat.ARGB8565:
+            L = data[0::3]
+            H = data[1::3]
+            A = data[2::3]
+
+            for h, l, a in zip(H, L, A):
+                p = (h << 8) | (l)
+                ret.append(bit_extend((p >> 11) & 0x1f, 5))  # R
+                ret.append(bit_extend((p >> 5) & 0x3f, 6))  # G
+                ret.append(bit_extend((p >> 0) & 0x1f, 5))  # B
+                ret.append(a)  # A
+
     elif bpp == 32:
         B = data[0::4]
         G = data[1::4]
@@ -283,6 +301,88 @@ def unpack_colors(data: bytes, cf: ColorFormat, w) -> List:
         assert 0
 
     return ret
+
+
+def write_c_array_file(
+        w: int, h: int,
+        stride: int,
+        cf: ColorFormat,
+        filename: str,
+        premultiplied: bool,
+        compress: CompressMethod,
+        data: bytes):
+    varname = path.basename(filename).split('.')[0]
+    varname = varname.replace("-", "_")
+    varname = varname.replace(".", "_")
+
+    flags = "0"
+    if compress is not CompressMethod.NONE:
+        flags += " | LV_IMAGE_FLAGS_COMPRESSED"
+    if premultiplied:
+        flags += " | LV_IMAGE_FLAGS_PREMULTIPLIED"
+
+    macro = "LV_ATTRIBUTE_" + varname.upper()
+    header = f'''
+#if defined(LV_LVGL_H_INCLUDE_SIMPLE)
+#include "lvgl.h"
+#elif defined(LV_BUILD_TEST)
+#include "../lvgl.h"
+#else
+#include "lvgl/lvgl.h"
+#endif
+
+
+#ifndef LV_ATTRIBUTE_MEM_ALIGN
+#define LV_ATTRIBUTE_MEM_ALIGN
+#endif
+
+#ifndef {macro}
+#define {macro}
+#endif
+
+static const
+LV_ATTRIBUTE_MEM_ALIGN LV_ATTRIBUTE_LARGE_CONST {macro}
+uint8_t {varname}_map[] = {{
+'''
+
+    ending = f'''
+}};
+
+const lv_image_dsc_t {varname} = {{
+  .header.magic = LV_IMAGE_HEADER_MAGIC,
+  .header.cf = LV_COLOR_FORMAT_{cf.name},
+  .header.flags = {flags},
+  .header.w = {w},
+  .header.h = {h},
+  .header.stride = {stride},
+  .data_size = sizeof({varname}_map),
+  .data = {varname}_map,
+}};
+
+'''
+
+    def write_binary(f, data, stride):
+        stride = 16 if stride == 0 else stride
+        for i, v in enumerate(data):
+            if i % stride == 0:
+                f.write("\n    ")
+            f.write(f"0x{v:02x},")
+        f.write("\n")
+
+    with open(filename, "w+") as f:
+        f.write(header)
+
+        if compress != CompressMethod.NONE:
+            write_binary(f, data, 16)
+        else:
+            # write palette separately
+            ncolors = cf.ncolors
+            if ncolors:
+                write_binary(f, data[:ncolors * 4], 16)
+
+            write_binary(f, data[ncolors * 4:], stride)
+
+        f.write(ending)
 
 
 class LVGLImageHeader:
@@ -369,8 +469,9 @@ class LVGLCompressData:
 
         if self.compress == CompressMethod.RLE:
             # RLE compression performs on pixel unit, pad data to pixel unit
-            pad = b'\x00' * (self.blk_size - self.raw_data_len % self.blk_size)
-            self.raw_data_len += len(pad)
+            pad = b'\x00' * 0
+            if self.raw_data_len % self.blk_size:
+                pad = b'\x00' * (self.blk_size - self.raw_data_len % self.blk_size)
             compressed = RLEImage().rle_compress(raw_data + pad, self.blk_size)
         elif self.compress == CompressMethod.LZ4:
             compressed = lz4.block.compress(raw_data, store_size=False)
@@ -395,11 +496,16 @@ class LVGLImage:
                  h: int = 0,
                  data: bytes = b'') -> None:
         self.stride = 0  # default no valid stride value
+        self.premultiplied = False
+        self.rgb565_dither = False
+        self.nema_gfx = False
         self.set_data(cf, w, h, data)
 
     def __repr__(self) -> str:
-        return (f"'LVGL image {self.w}x{self.h}, {self.cf.name},"
-                f" (12+{self.data_len})Byte'")
+        return (f"'LVGL image {self.w}x{self.h}, {self.cf.name}, "
+                f"{'Pre-multiplied, ' if self.premultiplied else ''}"
+                f"stride: {self.stride} "
+                f"(12+{self.data_len})Byte'")
 
     def adjust_stride(self, stride: int = 0, align: int = 1):
         """
@@ -446,7 +552,7 @@ class LVGLImage:
                 padding = b'\x00' * (new_stride - current_stride)
                 for i in range(h):
                     data_out.append(data_in[i * current_stride:(i + 1) *
-                                                               current_stride])
+                                            current_stride])
                     data_out.append(padding)
             return b''.join(data_out)
 
@@ -466,7 +572,98 @@ class LVGLImage:
                               stride // 2))
 
         self.stride = stride
-        self.data = b''.join(data_out)
+        self.data = bytearray(b''.join(data_out))
+
+    def premultiply(self):
+        """
+        Pre-multiply image RGB data with alpha, set corresponding image header flags
+        """
+        if self.premultiplied:
+            raise ParameterError("Image already pre-multiplied")
+
+        if not self.cf.has_alpha:
+            raise ParameterError(f"Image has no alpha channel: {self.cf.name}")
+
+        if self.cf.is_indexed:
+
+            def multiply(r, g, b, a):
+                r, g, b = (r * a) >> 8, (g * a) >> 8, (b * a) >> 8
+                return uint8_t(b) + uint8_t(g) + uint8_t(r) + uint8_t(a)
+
+            # process the palette only.
+            palette_size = self.cf.ncolors * 4
+            palette = self.data[:palette_size]
+            palette = [
+                multiply(palette[i], palette[i + 1], palette[i + 2],
+                         palette[i + 3]) for i in range(0, len(palette), 4)
+            ]
+            palette = b''.join(palette)
+            self.data = palette + self.data[palette_size:]
+        elif self.cf is ColorFormat.ARGB8888:
+
+            def multiply(b, g, r, a):
+                r, g, b = (r * a) >> 8, (g * a) >> 8, (b * a) >> 8
+                return uint32_t((a << 24) | (r << 16) | (g << 8) | (b << 0))
+
+            line_width = self.w * 4
+            for h in range(self.h):
+                offset = h * self.stride
+                map = self.data[offset:offset + self.stride]
+
+                processed = b''.join([
+                    multiply(map[i], map[i + 1], map[i + 2], map[i + 3])
+                    for i in range(0, line_width, 4)
+                ])
+                self.data[offset:offset + line_width] = processed
+        elif self.cf is ColorFormat.RGB565A8:
+
+            def multiply(data, a):
+                r = (data >> 11) & 0x1f
+                g = (data >> 5) & 0x3f
+                b = (data >> 0) & 0x1f
+
+                r, g, b = (r * a) // 255, (g * a) // 255, (b * a) // 255
+                return uint16_t((r << 11) | (g << 5) | (b << 0))
+
+            line_width = self.w * 2
+            for h in range(self.h):
+                # alpha map offset for this line
+                offset = self.h * self.stride + h * (self.stride // 2)
+                a = self.data[offset:offset + self.stride // 2]
+
+                # RGB map offset
+                offset = h * self.stride
+                rgb = self.data[offset:offset + self.stride]
+
+                processed = b''.join([
+                    multiply((rgb[i + 1] << 8) | rgb[i], a[i // 2])
+                    for i in range(0, line_width, 2)
+                ])
+                self.data[offset:offset + line_width] = processed
+        elif self.cf is ColorFormat.ARGB8565:
+
+            def multiply(data, a):
+                r = (data >> 11) & 0x1f
+                g = (data >> 5) & 0x3f
+                b = (data >> 0) & 0x1f
+
+                r, g, b = (r * a) // 255, (g * a) // 255, (b * a) // 255
+                return uint24_t((a << 16) | (r << 11) | (g << 5) | (b << 0))
+
+            line_width = self.w * 3
+            for h in range(self.h):
+                offset = h * self.stride
+                map = self.data[offset:offset + self.stride]
+
+                processed = b''.join([
+                    multiply((map[i + 1] << 8) | map[i], map[i + 2])
+                    for i in range(0, line_width, 3)
+                ])
+                self.data[offset:offset + line_width] = processed
+        else:
+            raise ParameterError(f"Not supported yet: {self.cf.name}")
+
+        self.premultiplied = True
 
     @property
     def data_len(self) -> int:
@@ -477,8 +674,9 @@ class LVGLImage:
         # palette is always in ARGB format, 4Byte per color
         p = self.cf.ncolors * 4 if self.is_indexed and self.w * self.h else 0
         p += self.stride * self.h
-        a8_stride = self.stride // 2
-        p += a8_stride * self.h if self.cf == ColorFormat.RGB565A8 else 0
+        if self.cf is ColorFormat.RGB565A8:
+            a8_stride = self.stride // 2
+            p += a8_stride * self.h
         return p
 
     @property
@@ -512,7 +710,7 @@ class LVGLImage:
 
         if self.data_len != len(data):
             raise ParameterError(f"{self} data length error got: {len(data)}, "
-                                 f"expect: {self.data_len}")
+                                 f"expect: {self.data_len}, {self}")
 
         self.data = data
 
@@ -558,6 +756,7 @@ class LVGLImage:
             bin = bytearray()
             flags = 0
             flags |= 0x08 if compress != CompressMethod.NONE else 0
+            flags |= 0x01 if self.premultiplied else 0
 
             header = LVGLImageHeader(self.cf,
                                      self.w,
@@ -578,78 +777,13 @@ class LVGLImage:
         self._check_ext(filename, ".c")
         self._check_dir(filename)
 
-        varname = path.basename(filename).split('.')[0]
-        varname = varname.replace("-", "_")
-        varname = varname.replace(".", "_")
-
-        flags = "0"
-        if compress is not CompressMethod.NONE:
-            flags += " | LV_IMAGE_FLAGS_COMPRESSED"
-
-        compressed = LVGLCompressData(self.cf, compress, self.data)
-
-        header = f'''
-#if defined(LV_LVGL_H_INCLUDE_SIMPLE)
-#include "lvgl.h"
-#elif defined(LV_BUILD_TEST)
-#include "../lvgl.h"
-#else
-#include "lvgl/lvgl.h"
-#endif
-
-
-#ifndef LV_ATTRIBUTE_MEM_ALIGN
-#define LV_ATTRIBUTE_MEM_ALIGN
-#endif
-
-#ifndef LV_ATTRIBUTE_IMG_DUST
-#define LV_ATTRIBUTE_IMG_DUST
-#endif
-
-static const
-LV_ATTRIBUTE_MEM_ALIGN LV_ATTRIBUTE_LARGE_CONST LV_ATTRIBUTE_IMG_DUST
-uint8_t {varname}_map[] = {{
-'''
-
-        ending = f'''
-}};
-
-const lv_img_dsc_t {varname} = {{
-  .header.magic = LV_IMAGE_HEADER_MAGIC,
-  .header.cf = LV_COLOR_FORMAT_{self.cf.name},
-  .header.flags = {flags},
-  .header.w = {self.w},
-  .header.h = {self.h},
-  .header.stride = {self.stride},
-  .data_size = {len(compressed.compressed)},
-  .data = {varname}_map,
-}};
-
-'''
-
-        def write_binary(f, data, stride):
-            for i, v in enumerate(data):
-                if i % stride == 0:
-                    f.write("\n    ")
-                f.write(f"0x{v:02x},")
-            f.write("\n")
-
-        with open(filename, "w+") as f:
-            f.write(header)
-
-            if compress is not CompressMethod.NONE:
-                write_binary(f, compressed.compressed, 16)
-            else:
-                # write palette separately
-                ncolors = self.cf.ncolors
-                if ncolors:
-                    write_binary(f, self.data[:ncolors * 4], 16)
-
-                write_binary(f, self.data[ncolors * 4:], self.stride)
-
-            f.write(ending)
-
-        return self
+        if compress != CompressMethod.NONE:
+            data = LVGLCompressData(self.cf, compress, self.data).compressed
+        else:
+            data = self.data
+        write_c_array_file(self.w, self.h, self.stride, self.cf, filename,
+                           self.premultiplied,
+                           compress, data)
 
     def to_png(self, filename: str):
         self._check_ext(filename, ".png")
@@ -706,13 +840,17 @@ const lv_img_dsc_t {varname} = {{
     def from_png(self,
                  filename: str,
                  cf: ColorFormat = None,
-                 background: int = 0x00_00_00):
+                 background: int = 0x00_00_00,
+                 rgb565_dither=False,
+                 nema_gfx=False):
         """
         Create lvgl image from png file.
         If cf is none, used I1/2/4/8 based on palette size
         """
 
         self.background = background
+        self.rgb565_dither = rgb565_dither
+        self.nema_gfx = nema_gfx
 
         if cf is None:  # guess cf from filename
             # split filename string and match with ColorFormat to check
@@ -740,9 +878,19 @@ const lv_img_dsc_t {varname} = {{
     def _png_to_indexed(self, cf: ColorFormat, filename: str):
         # convert to palette mode
         auto_cf = cf is None
-        reader = png.Reader(
-            bytes=PngQuant(256 if auto_cf else cf.ncolors).convert(filename))
-        w, h, rows, _ = reader.read()
+
+        # read the image data to get the metadata
+        reader = png.Reader(filename=filename)
+        w, h, rows, metadata = reader.read()
+
+        # to preserve original palette data only convert the image if needed. For this
+        # check if image has a palette and the requested palette size equals the existing one
+        if not 'palette' in metadata or not auto_cf and len(metadata['palette']) !=  2 ** cf.bpp:
+            # reread and convert file
+            reader = png.Reader(
+                bytes=PngQuant(256 if auto_cf else cf.ncolors).convert(filename))
+            w, h, rows, _ = reader.read()
+
         palette = reader.palette(alpha="force")  # always return alpha
 
         palette_len = len(palette)
@@ -773,6 +921,8 @@ const lv_img_dsc_t {varname} = {{
         # pack data if not in I8 format
         if cf == ColorFormat.I8:
             for e in rows:
+                if self.nema_gfx:
+                    e = bytearray((x >> 4) | ((x & 0x0F) << 4) for x in e)
                 rawdata += e
         else:
             for e in png.pack_rows(rows, cf.bpp):
@@ -794,12 +944,22 @@ const lv_img_dsc_t {varname} = {{
                     rawdata += uint8_t(e)
         else:
             shift = 8 - cf.bpp
-            mask = 2 ** cf.bpp - 1
+            mask = 2**cf.bpp - 1
             rows = [[(a >> shift) & mask for a in row[3::4]] for row in rows]
             for row in png.pack_rows(rows, cf.bpp):
                 rawdata += row
 
         self.set_data(cf, w, h, rawdata)
+
+    def sRGB_to_linear(self, x):
+        if x < 0.04045:
+            return x / 12.92
+        return pow((x + 0.055) / 1.055, 2.4)
+
+    def linear_to_sRGB(self, y):
+        if y <= 0.0031308:
+            return 12.92 * y
+        return 1.055 * pow(y, 1 / 2.4) - 0.055
 
     def _png_to_luma_only(self, cf: ColorFormat, filename: str):
         reader = png.Reader(str(filename))
@@ -812,18 +972,21 @@ const lv_img_dsc_t {varname} = {{
             A = row[3::4]
             for r, g, b, a in zip(R, G, B, A):
                 r, g, b, a = color_pre_multiply(r, g, b, a, self.background)
+                r = self.sRGB_to_linear(r / 255.0)
+                g = self.sRGB_to_linear(g / 255.0)
+                b = self.sRGB_to_linear(b / 255.0)
                 luma = 0.2126 * r + 0.7152 * g + 0.0722 * b
-                rawdata += uint8_t(int(luma))
+                rawdata += uint8_t(int(self.linear_to_sRGB(luma) * 255))
 
         self.set_data(ColorFormat.L8, w, h, rawdata)
 
     def _png_to_colormap(self, cf, filename: str):
 
-        if cf in (ColorFormat.ARGB8888, ColorFormat.TRUECOLOR_ALPHA):
+        if cf == ColorFormat.ARGB8888:
 
             def pack(r, g, b, a):
                 return uint32_t((a << 24) | (r << 16) | (g << 8) | (b << 0))
-        elif cf in (ColorFormat.XRGB8888, ColorFormat.TRUECOLOR):
+        elif cf == ColorFormat.XRGB8888:
 
             def pack(r, g, b, a):
                 r, g, b, a = color_pre_multiply(r, g, b, a, self.background)
@@ -841,6 +1004,7 @@ const lv_img_dsc_t {varname} = {{
                 color |= (g >> 2) << 5
                 color |= (b >> 3) << 0
                 return uint16_t(color)
+
         elif cf == ColorFormat.RGB565A8:
 
             def pack(r, g, b, a):
@@ -848,27 +1012,79 @@ const lv_img_dsc_t {varname} = {{
                 color |= (g >> 2) << 5
                 color |= (b >> 3) << 0
                 return uint16_t(color)
+        elif cf == ColorFormat.ARGB8565:
+
+            def pack(r, g, b, a):
+                color = (r >> 3) << 11
+                color |= (g >> 2) << 5
+                color |= (b >> 3) << 0
+                return uint24_t((a << 16) | color)
         else:
-            assert (0)
+            raise FormatError(f"Invalid color format: {cf.name}")
 
         reader = png.Reader(str(filename))
         w, h, rows, _ = reader.asRGBA8()
         rawdata = bytearray()
         alpha = bytearray()
-        for row in rows:
+        for y, row in enumerate(rows):
             R = row[0::4]
             G = row[1::4]
             B = row[2::4]
             A = row[3::4]
-            for r, g, b, a in zip(R, G, B, A):
+            for x, (r, g, b, a) in enumerate(zip(R, G, B, A)):
                 if cf == ColorFormat.RGB565A8:
                     alpha += uint8_t(a)
+
+                if (
+                    self.rgb565_dither and
+                    cf in (ColorFormat.RGB565, ColorFormat.RGB565A8, ColorFormat.ARGB8565)
+                ):
+                    treshold_id = ((y & 7) << 3) + (x & 7)
+
+                    r = min(r + red_thresh[treshold_id], 0xFF) & 0xF8
+                    g = min(g + green_thresh[treshold_id], 0xFF) & 0xFC
+                    b = min(b + blue_thresh[treshold_id], 0xFF) & 0xF8
+
                 rawdata += pack(r, g, b, a)
 
         if cf == ColorFormat.RGB565A8:
             rawdata += alpha
 
         self.set_data(cf, w, h, rawdata)
+
+
+red_thresh = [
+  1, 7, 3, 5, 0, 8, 2, 6,
+  7, 1, 5, 3, 8, 0, 6, 2,
+  3, 5, 0, 8, 2, 6, 1, 7,
+  5, 3, 8, 0, 6, 2, 7, 1,
+  0, 8, 2, 6, 1, 7, 3, 5,
+  8, 0, 6, 2, 7, 1, 5, 3,
+  2, 6, 1, 7, 3, 5, 0, 8,
+  6, 2, 7, 1, 5, 3, 8, 0
+]
+
+green_thresh = [
+  1, 3, 2, 2, 3, 1, 2, 2,
+  2, 2, 0, 4, 2, 2, 4, 0,
+  3, 1, 2, 2, 1, 3, 2, 2,
+  2, 2, 4, 0, 2, 2, 0, 4,
+  1, 3, 2, 2, 3, 1, 2, 2,
+  2, 2, 0, 4, 2, 2, 4, 0,
+  3, 1, 2, 2, 1, 3, 2, 2,
+  2, 2, 4, 0, 2, 2, 0, 4
+]
+
+blue_thresh = [
+  5, 3, 8, 0, 6, 2, 7, 1,
+  3, 5, 0, 8, 2, 6, 1, 7,
+  8, 0, 6, 2, 7, 1, 5, 3,
+  0, 8, 2, 6, 1, 7, 3, 5,
+  6, 2, 7, 1, 5, 3, 8, 0,
+  2, 6, 1, 7, 3, 5, 0, 8,
+  7, 1, 5, 3, 8, 0, 6, 2,
+  1, 7, 3, 5, 0, 8, 2, 6
+]
 
 
 class RLEHeader:
@@ -931,7 +1147,7 @@ class RLEImage(LVGLImage):
                 ctrl_byte = uint8_t(nonrepeat_cnt | 0x80)
                 compressed_data.append(ctrl_byte)
                 compressed_data.append(memview[index:index +
-                                                     nonrepeat_cnt * blksize])
+                                               nonrepeat_cnt * blksize])
                 index += nonrepeat_cnt * blksize
             else:
                 ctrl_byte = uint8_t(repeat_cnt)
@@ -996,10 +1212,46 @@ class RLEImage(LVGLImage):
         return nonrepeat_count
 
 
+class RAWImage():
+    '''
+    RAW image is an exception to LVGL image, it has color format of RAW or RAW_ALPHA.
+    It has same image header as LVGL image, but the data is pure raw data from file.
+    It does not support stride adjustment etc. features for LVGL image.
+    It only supports convert an image to C array with RAW or RAW_ALPHA format.
+    '''
+    CF_SUPPORTED = (ColorFormat.RAW, ColorFormat.RAW_ALPHA)
+
+    class NotSupported(NotImplementedError):
+        pass
+
+    def __init__(self,
+                 cf: ColorFormat = ColorFormat.UNKNOWN,
+                 data: bytes = b'') -> None:
+        self.cf = cf
+        self.data = data
+
+    def to_c_array(self,
+                   filename: str):
+        # Image size is set to zero, to let PNG or JPEG decoder to handle it
+        # Stride is meaningless for RAW image
+        write_c_array_file(0, 0, 0, self.cf, filename,
+                           False, CompressMethod.NONE, self.data)
+
+    def from_file(self,
+                  filename: str,
+                  cf: ColorFormat = None):
+        if cf not in RAWImage.CF_SUPPORTED:
+            raise RAWImage.NotSupported(f"Invalid color format: {cf.name}")
+
+        with open(filename, "rb") as f:
+            self.data = f.read()
+        self.cf = cf
+        return self
+
+
 class OutputFormat(Enum):
     C_ARRAY = "C"
     BIN_FILE = "BIN"
-    RAW_DATA = "RAW"  # option of not writing any file
     PNG_FILE = "PNG"  # convert to lvgl image and then to png
 
 
@@ -1012,8 +1264,11 @@ class PNGConverter:
                  odir: str,
                  background: int = 0x00,
                  align: int = 1,
+                 premultiply: bool = False,
                  compress: CompressMethod = CompressMethod.NONE,
-                 keep_folder=True) -> None:
+                 keep_folder=True,
+                 rgb565_dither=False,
+                 nema_gfx=False) -> None:
         self.files = files
         self.cf = cf
         self.ofmt = ofmt
@@ -1021,8 +1276,11 @@ class PNGConverter:
         self.pngquant = None
         self.keep_folder = keep_folder
         self.align = align
+        self.premultiply = premultiply
         self.compress = compress
         self.background = background
+        self.rgb565_dither = rgb565_dither
+        self.nema_gfx = nema_gfx
 
     def _replace_ext(self, input, ext):
         if self.keep_folder:
@@ -1036,17 +1294,25 @@ class PNGConverter:
     def convert(self):
         output = []
         for f in self.files:
-            img = LVGLImage().from_png(f, self.cf, background=self.background)
-            img.adjust_stride(align=self.align)
-            output.append((f, img))
-            if self.ofmt == OutputFormat.BIN_FILE:
-                img.to_bin(self._replace_ext(f, ".bin"),
-                           compress=self.compress)
-            elif self.ofmt == OutputFormat.C_ARRAY:
-                img.to_c_array(self._replace_ext(f, ".c"),
+            if self.cf in (ColorFormat.RAW, ColorFormat.RAW_ALPHA):
+                # Process RAW image explicitly
+                img = RAWImage().from_file(f, self.cf)
+                img.to_c_array(self._replace_ext(f, ".c"))
+            else:
+                img = LVGLImage().from_png(f, self.cf, background=self.background, rgb565_dither=self.rgb565_dither, nema_gfx=self.nema_gfx)
+                img.adjust_stride(align=self.align)
+
+                if self.premultiply:
+                    img.premultiply()
+                output.append((f, img))
+                if self.ofmt == OutputFormat.BIN_FILE:
+                    img.to_bin(self._replace_ext(f, ".bin"),
                                compress=self.compress)
-            elif self.ofmt == OutputFormat.PNG_FILE:
-                img.to_png(self._replace_ext(f, ".png"))
+                elif self.ofmt == OutputFormat.C_ARRAY:
+                    img.to_c_array(self._replace_ext(f, ".c"),
+                                   compress=self.compress)
+                elif self.ofmt == OutputFormat.PNG_FILE:
+                    img.to_png(self._replace_ext(f, ".png"))
 
         return output
 
@@ -1064,9 +1330,15 @@ def main():
         default="I8",
         choices=[
             "L8", "I1", "I2", "I4", "I8", "A1", "A2", "A4", "A8", "ARGB8888",
-            "XRGB8888", "RGB565", "RGB565A8", "RGB888", "TRUECOLOR",
-            "TRUECOLOR_ALPHA", "AUTO"
+            "XRGB8888", "RGB565", "RGB565A8", "ARGB8565", "RGB888", "AUTO",
+            "RAW", "RAW_ALPHA"
         ])
+
+    parser.add_argument('--rgb565dither', action='store_true',
+                        help="use dithering to correct banding in gradients", default=False)
+
+    parser.add_argument('--premultiply', action='store_true',
+                        help="pre-multiply color with alpha", default=False)
 
     parser.add_argument('--compress',
                         help=("Binary data compress method, default to NONE"),
@@ -1085,6 +1357,8 @@ def main():
                         type=lambda x: int(x, 0),
                         metavar='color',
                         nargs='?')
+    parser.add_argument('--nemagfx', action='store_true',
+                    help="export color palette for I8 images in a format compatible with NEMA accelerator", default=False)
     parser.add_argument('-o',
                         '--output',
                         default="./output",
@@ -1112,7 +1386,8 @@ def main():
     else:
         cf = ColorFormat[args.cf]
 
-    ofmt = OutputFormat(args.ofmt)
+    ofmt = OutputFormat(args.ofmt) if cf not in (
+        ColorFormat.RAW, ColorFormat.RAW_ALPHA) else OutputFormat.C_ARRAY
     compress = CompressMethod[args.compress]
 
     converter = PNGConverter(files,
@@ -1121,8 +1396,11 @@ def main():
                              args.output,
                              background=args.background,
                              align=args.align,
+                             premultiply=args.premultiply,
                              compress=compress,
-                             keep_folder=False)
+                             keep_folder=False,
+                             rgb565_dither=args.rgb565dither,
+                             nema_gfx=args.nemagfx)
     output = converter.convert()
     for f, img in output:
         logging.info(f"len: {img.data_len} for {path.basename(f)} ")
@@ -1133,13 +1411,26 @@ def main():
 def test():
     logging.basicConfig(level=logging.INFO)
     f = "pngs/cogwheel.RGB565A8.png"
-    img = LVGLImage().from_png(f, cf=ColorFormat.RGB888, background=0xFF_FF_00)
+    img = LVGLImage().from_png(f,
+                               cf=ColorFormat.ARGB8565,
+                               background=0xFF_FF_00,
+                               rgb565_dither=True)
     img.adjust_stride(align=16)
-    img.to_bin("output/cogwheel.RGB888.bin")
+    img.premultiply()
+    img.to_bin("output/cogwheel.ARGB8565.bin")
     img.to_c_array("output/cogwheel-abc.c")  # file name is used as c var name
-    img.to_png("output/cogwheel.RGB888.png.png")  # convert back to png
+    img.to_png("output/cogwheel.ARGB8565.png.png")  # convert back to png
+
+
+def test_raw():
+    logging.basicConfig(level=logging.INFO)
+    f = "pngs/cogwheel.RGB565A8.png"
+    img = RAWImage().from_file(f,
+                               cf=ColorFormat.RAW_ALPHA)
+    img.to_c_array("output/cogwheel-raw.c")
 
 
 if __name__ == "__main__":
     # test()
+    # test_raw()
     main()

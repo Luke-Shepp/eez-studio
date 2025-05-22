@@ -16,6 +16,7 @@ import type { IDataContext } from "project-editor/flow/flow-interfaces";
 import type { Variable } from "project-editor/features/variable/variable";
 import {
     getArrayElementTypeFromType,
+    getObjectVariableTypeFromType,
     getStructureFromType
 } from "project-editor/features/variable/value-type";
 import { FlowTabState } from "project-editor/flow/flow-tab-state";
@@ -34,6 +35,9 @@ import { getValueLabel } from "project-editor/features/variable/value-type";
 import { stringCompare } from "eez-studio-shared/string";
 
 import { isArray } from "eez-studio-shared/util";
+import type { UserProperty } from "project-editor/flow/user-property";
+import { IObjectVariableValueFieldDescription } from "eez-studio-types";
+import { SearchInput } from "eez-studio-ui/search-input";
 
 ////////////////////////////////////////////////////////////////////////////////
 
@@ -186,6 +190,7 @@ const WatchTable = observer(
             super(props);
 
             makeObservable(this, {
+                searchText: observable,
                 columns: computed,
                 watchExpressions: computed,
                 globalVariables: computed,
@@ -198,6 +203,19 @@ const WatchTable = observer(
         }
 
         expandedMap = new Map<string, boolean>();
+        searchText = "";
+
+        onSearchChange = (event: any) => {
+            this.searchText = event.target.value;
+        };
+
+        filterBySearchText(text: string) {
+            const searchText = this.searchText.trim().toLowerCase();
+            if (!searchText) {
+                return true;
+            }
+            return text.toLowerCase().indexOf(searchText) != -1;
+        }
 
         expanded(id: string, defaultValue: boolean) {
             const expandedMap = this.expandedMap;
@@ -246,7 +264,7 @@ const WatchTable = observer(
                     return undefined;
                 }
 
-                const MAX_CHILDREN = 1000;
+                const MAX_CHILDREN = 1000; // MAX_ARRAY_SIZE_TRANSFERRED_IN_DEBUGGER
 
                 if (isArray(value) || value instanceof Uint8Array) {
                     return () => {
@@ -302,6 +320,85 @@ const WatchTable = observer(
                     return () => {
                         let structure;
                         if (type) {
+                            const objectVariableType =
+                                getObjectVariableTypeFromType(
+                                    this.props.runtime.projectStore,
+                                    type
+                                );
+
+                            if (objectVariableType) {
+                                value = objectVariableType.getValue
+                                    ? objectVariableType.getValue(value)
+                                    : undefined;
+
+                                const getChildren = (
+                                    value: any,
+                                    valueFieldDescriptions: IObjectVariableValueFieldDescription[]
+                                ): ITreeNode[] => {
+                                    const children: ITreeNode[] = [];
+
+                                    for (const valueFieldDescription of valueFieldDescriptions) {
+                                        const propertyValue =
+                                            valueFieldDescription.getFieldValue(
+                                                value
+                                            );
+
+                                        const name = valueFieldDescription.name;
+
+                                        const valueType =
+                                            valueFieldDescription.valueType;
+
+                                        const valueLabel = (
+                                            <span>
+                                                {getValueLabel(
+                                                    this.props.runtime
+                                                        .projectStore.project,
+                                                    propertyValue,
+                                                    typeof valueType == "string"
+                                                        ? valueType
+                                                        : null
+                                                )}
+                                            </span>
+                                        );
+
+                                        children.push(
+                                            observable({
+                                                id: id + name,
+                                                name,
+                                                nameTitle: name,
+                                                value: valueLabel,
+                                                valueTitle: valueLabel,
+                                                type:
+                                                    typeof valueType == "string"
+                                                        ? valueType
+                                                        : "object",
+
+                                                children:
+                                                    typeof valueType == "string"
+                                                        ? undefined
+                                                        : () =>
+                                                              getChildren(
+                                                                  propertyValue,
+                                                                  valueType
+                                                              ),
+                                                selected: false,
+                                                expanded: this.expanded(
+                                                    id + name,
+                                                    false
+                                                )
+                                            })
+                                        );
+                                    }
+
+                                    return children;
+                                };
+
+                                return getChildren(
+                                    value,
+                                    objectVariableType.valueFieldDescriptions
+                                );
+                            }
+
                             structure = getStructureFromType(
                                 this.props.runtime.projectStore.project,
                                 type
@@ -311,6 +408,7 @@ const WatchTable = observer(
                         let numChildren = 0;
 
                         const children: ITreeNode[] = [];
+
                         for (const name in value) {
                             const propertyValue = value[name];
 
@@ -355,6 +453,7 @@ const WatchTable = observer(
                                 break;
                             }
                         }
+
                         return children;
                     };
                 }
@@ -372,8 +471,11 @@ const WatchTable = observer(
                 value: undefined,
                 type: "",
                 children: () =>
-                    this.props.runtime.projectStore.uiStateStore.watchExpressions.map(
-                        (expression, i) => {
+                    this.props.runtime.projectStore.uiStateStore.watchExpressions
+                        .filter(expression =>
+                            this.filterBySearchText(expression)
+                        )
+                        .map((expression, i) => {
                             let watchExpressionLabel;
                             let value;
                             let type: any;
@@ -430,57 +532,62 @@ const WatchTable = observer(
                                 className,
                                 data: i
                             });
-                        }
-                    ),
+                        }),
                 selected: false,
                 expanded: this.expanded("expressions", true)
             });
         }
 
-        getVariableTreeNodes = (id: string, variables: Variable[]) => {
+        getVariableTreeNodes = (
+            id: string,
+            variables: (Variable | UserProperty)[]
+        ) => {
             variables = variables.slice();
             variables.sort((a, b) => stringCompare(a.fullName, b.fullName));
-            return variables.map(variable => {
-                const flowState = this.props.runtime.selectedFlowState;
+            return variables
+                .filter(variable => this.filterBySearchText(variable.fullName))
+                .map(variable => {
+                    const flowState = this.props.runtime.selectedFlowState;
 
-                let dataContext: IDataContext;
-                if (flowState) {
-                    dataContext = flowState.dataContext;
-                } else {
-                    dataContext = this.props.runtime.projectStore.dataContext;
-                }
+                    let dataContext: IDataContext;
+                    if (flowState) {
+                        dataContext = flowState.dataContext;
+                    } else {
+                        dataContext =
+                            this.props.runtime.projectStore.dataContext;
+                    }
 
-                const name = variable.fullName;
+                    const name = variable.fullName;
 
-                const value = dataContext.get(name);
-                const valueLabel = (
-                    <span>
-                        {getValueLabel(
-                            this.props.runtime.projectStore.project,
+                    const value = dataContext.get(name);
+                    const valueLabel = (
+                        <span>
+                            {getValueLabel(
+                                this.props.runtime.projectStore.project,
+                                value,
+                                variable.type
+                            )}
+                        </span>
+                    );
+
+                    return observable({
+                        id: id + name,
+
+                        name: name,
+                        nameTitle: name,
+                        value: valueLabel,
+                        valueTitle: valueLabel,
+                        type: variable.type,
+
+                        children: this.getValueChildren(
+                            id + name,
                             value,
                             variable.type
-                        )}
-                    </span>
-                );
-
-                return observable({
-                    id: id + name,
-
-                    name: name,
-                    nameTitle: name,
-                    value: valueLabel,
-                    valueTitle: valueLabel,
-                    type: variable.type,
-
-                    children: this.getValueChildren(
-                        id + name,
-                        value,
-                        variable.type
-                    ),
-                    selected: false,
-                    expanded: this.expanded(id + name, false)
+                        ),
+                        selected: false,
+                        expanded: this.expanded(id + name, false)
+                    });
                 });
-            });
         };
 
         get globalVariables() {
@@ -502,7 +609,11 @@ const WatchTable = observer(
 
         get localVariables() {
             const flowState = this.props.runtime.selectedFlowState;
-            if (!flowState || flowState.flow.localVariables.length == 0) {
+            if (!flowState) {
+                return undefined;
+            }
+
+            if (flowState.flow.userPropertiesAndLocalVariables.length == 0) {
                 return undefined;
             }
 
@@ -514,7 +625,7 @@ const WatchTable = observer(
                 children: () =>
                     this.getVariableTreeNodes(
                         "local-variables",
-                        flowState.flow.localVariables
+                        flowState.flow.userPropertiesAndLocalVariables
                     ),
                 selected: false,
                 expanded: this.expanded("local-variables", true)
@@ -611,7 +722,9 @@ const WatchTable = observer(
             const { flowState, component } = result;
 
             const inputs = component.inputs.filter(
-                input => input.name != "@seqin"
+                input =>
+                    input.name != "@seqin" &&
+                    this.filterBySearchText(input.name)
             );
             if (inputs.length == 0) {
                 return undefined;
@@ -692,15 +805,25 @@ const WatchTable = observer(
 
         render() {
             return (
-                <div className="EezStudio_DebuggerVariablesTable">
-                    {
-                        <TreeTable
-                            columns={this.columns}
-                            showOnlyChildren={true}
-                            rootNode={this.rootNode}
-                            selectNode={this.selectNode}
-                        />
-                    }
+                <div className="EezStudio_DebuggerPanel_WatchBody">
+                    <SearchInput
+                        searchText={this.searchText}
+                        onClear={action(() => {
+                            this.searchText = "";
+                        })}
+                        onChange={this.onSearchChange}
+                        onKeyDown={this.onSearchChange}
+                    ></SearchInput>
+                    <div className="EezStudio_DebuggerVariablesTable">
+                        {
+                            <TreeTable
+                                columns={this.columns}
+                                showOnlyChildren={true}
+                                rootNode={this.rootNode}
+                                selectNode={this.selectNode}
+                            />
+                        }
+                    </div>
                 </div>
             );
         }

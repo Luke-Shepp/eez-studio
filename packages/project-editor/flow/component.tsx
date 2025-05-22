@@ -1,13 +1,16 @@
 import { MenuItem } from "@electron/remote";
 import React from "react";
-import { observable, computed, makeObservable } from "mobx";
+import { observable, computed, makeObservable, runInAction } from "mobx";
 import classNames from "classnames";
 import { each } from "lodash";
 
 import { validators } from "eez-studio-shared/validation";
 import { BoundingRectBuilder, Point, Rect } from "eez-studio-shared/geometry";
 
-import { showGenericDialog } from "eez-studio-ui/generic-dialog";
+import {
+    IFieldProperties,
+    showGenericDialog
+} from "eez-studio-ui/generic-dialog";
 
 import * as notification from "eez-studio-ui/notification";
 
@@ -51,6 +54,7 @@ import {
 import {
     isLVGLProject,
     isNotDashboardProject,
+    isNotLVGLProject,
     isNotProjectWithFlowSupport
 } from "project-editor/project/project-type-traits";
 import { objectToJS } from "project-editor/store";
@@ -69,9 +73,12 @@ import {
     ResizingProperty
 } from "project-editor/flow/editor/resizing-widget-property";
 
-import type { Page } from "project-editor/features/page/page";
+import type {
+    ICustomWidgetCreateParams,
+    Page
+} from "project-editor/features/page/page";
 import {
-    conditionalStylesProperty,
+    getAdditionalStyleFlowProperties,
     Style
 } from "project-editor/features/style/style";
 import type {
@@ -105,6 +112,7 @@ import { getComponentName } from "project-editor/flow/components/components-regi
 import { ProjectEditor } from "project-editor/project-editor-interface";
 import { FLOW_ITERATOR_INDEX_VARIABLE } from "project-editor/features/variable/defs";
 import type {
+    EnumItems,
     IActionComponentDefinition,
     IComponentProperty,
     IDashboardComponentContext
@@ -159,6 +167,7 @@ import {
 } from "project-editor/store/serialization";
 import { StylePropertyUI } from "project-editor/features/style/StylePropertyUI";
 import { findVariable } from "project-editor/project/project";
+import type { Action } from "project-editor/features/action/action";
 
 ////////////////////////////////////////////////////////////////////////////////
 
@@ -179,7 +188,8 @@ const resizingProperty: PropertyInfo = {
     propertyGridGroup: geometryGroup,
     propertyGridRowComponent: ResizingProperty,
     skipSearch: true,
-    hideInPropertyGrid: isLVGLProject
+    hideInPropertyGrid: (widget: Widget) =>
+        isLVGLProject(widget) || isWidgetUnderDockingManager(widget)
 };
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -350,7 +360,7 @@ function getClassFromType(projectStore: ProjectStore, type: string) {
     return NotFoundComponent;
 }
 
-function getComponentClass(projectStore: ProjectStore, jsObject: any) {
+export function getComponentClass(projectStore: ProjectStore, jsObject: any) {
     if (jsObject.type === "EvalActionComponent") {
         jsObject.type = "EvalJSExprActionComponent";
     }
@@ -432,9 +442,13 @@ export function makeExpressionProperty(
                           let menuItems: Electron.MenuItem[] = [];
 
                           if (props.objects.length == 1) {
-                              const component = props.objects[0] as Component;
+                              const component = getAncestorOfType<Component>(
+                                  props.objects[0],
+                                  Component.classInfo
+                              );
 
                               if (
+                                  component &&
                                   !getProperty(
                                       component,
                                       props.propertyInfo.name
@@ -515,8 +529,7 @@ export function makeExpressionProperty(
                     },
                     params
                 ),
-            monospaceFont: true,
-            disableSpellcheck: true
+            monospaceFont: true
         } as Partial<PropertyInfo>,
         propertyInfo
     );
@@ -544,8 +557,7 @@ export function makeAssignableExpressionProperty(
                     },
                     params
                 ),
-            monospaceFont: true,
-            disableSpellcheck: true
+            monospaceFont: true
         } as Partial<PropertyInfo>,
         propertyInfo
     );
@@ -558,8 +570,7 @@ export function makeTemplateLiteralProperty(
         {
             flowProperty: "template-literal",
             expressionType: "string",
-            monospaceFont: true,
-            disableSpellcheck: true
+            monospaceFont: true
         } as Partial<PropertyInfo>,
         propertyInfo
     );
@@ -1635,6 +1646,16 @@ function getComponentLabel(component: Component) {
 
 ////////////////////////////////////////////////////////////////////////////////
 
+function isWidgetUnderDockingManager(widget: Component) {
+    const parent = getWidgetParent(widget);
+    return (
+        parent instanceof ProjectEditor.ContainerWidgetClass &&
+        parent.layout == "docking-manager"
+    );
+}
+
+////////////////////////////////////////////////////////////////////////////////
+
 export type AutoSize = "width" | "height" | "both" | "none";
 
 export class Component extends EezObject {
@@ -1719,6 +1740,48 @@ export class Component extends EezObject {
                 hideInDocumentation: "all"
             },
             {
+                name: "left",
+                type: PropertyType.Number,
+                propertyGridGroup: geometryGroup,
+                disabled: isActionComponent,
+                hideInPropertyGrid: isWidgetUnderDockingManager,
+                hideInDocumentation: "action"
+            },
+            {
+                name: "top",
+                type: PropertyType.Number,
+                propertyGridGroup: geometryGroup,
+                disabled: isActionComponent,
+                hideInPropertyGrid: isWidgetUnderDockingManager,
+                hideInDocumentation: "action"
+            },
+            {
+                name: "width",
+                type: PropertyType.Number,
+                propertyGridGroup: geometryGroup,
+                disabled: isActionComponent,
+                hideInPropertyGrid: isWidgetUnderDockingManager,
+                hideInDocumentation: "action"
+            },
+            {
+                name: "height",
+                type: PropertyType.Number,
+                propertyGridGroup: geometryGroup,
+                disabled: isActionComponent,
+                hideInPropertyGrid: isWidgetUnderDockingManager,
+                hideInDocumentation: "action"
+            },
+            {
+                name: "absolutePosition",
+                displayName: "Absolute pos.",
+                type: PropertyType.String,
+                propertyGridGroup: geometryGroup,
+                computed: true,
+                disabled: isActionComponent,
+                hideInPropertyGrid: isWidgetUnderDockingManager,
+                hideInDocumentation: "action"
+            },
+            {
                 name: "alignAndDistribute",
                 type: PropertyType.Any,
                 propertyGridGroup: geometryGroup,
@@ -1726,6 +1789,9 @@ export class Component extends EezObject {
                 propertyGridRowComponent: AlignAndDistributePropertyGridUI,
                 skipSearch: true,
                 hideInPropertyGrid: (widget: Widget) => {
+                    if (isWidgetUnderDockingManager(widget)) {
+                        return true;
+                    }
                     const projectStore = ProjectEditor.getProjectStore(widget);
                     const propertyGridObjects =
                         projectStore.navigationStore.propertyGridObjects;
@@ -1746,42 +1812,6 @@ export class Component extends EezObject {
                 }
             },
             {
-                name: "left",
-                type: PropertyType.Number,
-                propertyGridGroup: geometryGroup,
-                disabled: isActionComponent,
-                hideInDocumentation: "action"
-            },
-            {
-                name: "top",
-                type: PropertyType.Number,
-                propertyGridGroup: geometryGroup,
-                disabled: isActionComponent,
-                hideInDocumentation: "action"
-            },
-            {
-                name: "width",
-                type: PropertyType.Number,
-                propertyGridGroup: geometryGroup,
-                disabled: isActionComponent,
-                hideInDocumentation: "action"
-            },
-            {
-                name: "height",
-                type: PropertyType.Number,
-                propertyGridGroup: geometryGroup,
-                disabled: isActionComponent,
-                hideInDocumentation: "action"
-            },
-            {
-                name: "absolutePosition",
-                type: PropertyType.String,
-                propertyGridGroup: geometryGroup,
-                computed: true,
-                disabled: isActionComponent,
-                hideInDocumentation: "action"
-            },
-            {
                 name: "centerWidgetUI",
                 displayName: "Center widget",
                 type: PropertyType.Any,
@@ -1790,6 +1820,9 @@ export class Component extends EezObject {
                 propertyGridRowComponent: CenterWidgetUI,
                 skipSearch: true,
                 hideInPropertyGrid: (widget: Widget) => {
+                    if (isWidgetUnderDockingManager(widget)) {
+                        return true;
+                    }
                     const projectStore = ProjectEditor.getProjectStore(widget);
                     if (!projectStore) {
                         return false;
@@ -1987,7 +2020,9 @@ export class Component extends EezObject {
                                 componentInput.displayName ||
                                 componentInput.name
                             }"`,
-                            component
+                            component,
+                            undefined,
+                            true
                         )
                     );
                 }
@@ -2063,7 +2098,9 @@ export class Component extends EezObject {
                                           )
                                     : componentOutput.name
                             }" is not connected`,
-                            component
+                            component,
+                            undefined,
+                            true
                         )
                     );
                 }
@@ -2216,6 +2253,16 @@ export class Component extends EezObject {
 
     get rect(): Rect {
         if (this instanceof Widget) {
+            if (isWidgetUnderDockingManager(this)) {
+                const parent = getWidgetParent(this);
+                return {
+                    left: 0,
+                    top: 0,
+                    width: parent.width,
+                    height: parent.height
+                };
+            }
+
             if (this.timeline.length > 0) {
                 const timelineEditorState = getTimelineEditorState(this);
                 if (timelineEditorState) {
@@ -2375,21 +2422,27 @@ export class Component extends EezObject {
 ////////////////////////////////////////////////////////////////////////////////
 
 function getWidgetEvents(object: IEezObject) {
-    return (
-        getClassInfo(
-            getAncestorOfType<Widget>(
-                object,
-                ProjectEditor.WidgetClass.classInfo
-            )!
-        ).widgetEvents || {}
-    );
+    const widgetEvents = getClassInfo(
+        getAncestorOfType<Widget>(object, ProjectEditor.WidgetClass.classInfo)!
+    ).widgetEvents;
+
+    if (!widgetEvents) {
+        return {};
+    }
+
+    if (typeof widgetEvents == "function") {
+        return widgetEvents(object);
+    }
+
+    return widgetEvents;
 }
 
 function getEventEnumItems(
     eventHandlers: EventHandler[],
-    eventHandler: EventHandler | undefined
+    eventHandler: EventHandler
 ) {
     const existingEventNames: string[] = eventHandlers
+        .filter(eh => eh.handlerType == eventHandler?.handlerType)
         .filter(eh => eh != eventHandler)
         .map(eventHandler => eventHandler.eventName);
 
@@ -2407,6 +2460,7 @@ export class EventHandler extends EezObject {
     eventName: string;
     handlerType: "flow" | "action";
     action: string;
+    userData: number;
 
     override makeEditable() {
         super.makeEditable();
@@ -2414,7 +2468,8 @@ export class EventHandler extends EezObject {
         makeObservable(this, {
             eventName: observable,
             handlerType: observable,
-            action: observable
+            action: observable,
+            userData: observable
         });
     }
 
@@ -2451,6 +2506,11 @@ export class EventHandler extends EezObject {
                 disabled: (eventHandler: EventHandler) => {
                     return eventHandler.handlerType != "action";
                 }
+            },
+            {
+                name: "userData",
+                type: PropertyType.Number,
+                disabled: isNotLVGLProject
             }
         ],
 
@@ -2499,15 +2559,17 @@ export class EventHandler extends EezObject {
         },
 
         deleteObjectRefHook: (eventHandler: EventHandler) => {
-            const widget = getAncestorOfType<Widget>(
-                eventHandler,
-                ProjectEditor.WidgetClass.classInfo
-            )!;
+            if (eventHandler.handlerType == "flow") {
+                const widget = getAncestorOfType<Widget>(
+                    eventHandler,
+                    ProjectEditor.WidgetClass.classInfo
+                )!;
 
-            ProjectEditor.getFlow(widget).deleteConnectionLinesFromOutput(
-                widget,
-                eventHandler.eventName
-            );
+                ProjectEditor.getFlow(widget).deleteConnectionLinesFromOutput(
+                    widget,
+                    eventHandler.eventName
+                );
+            }
         },
 
         defaultValue: {
@@ -2519,17 +2581,80 @@ export class EventHandler extends EezObject {
                 jsObject.eventName = jsObject.trigger;
                 delete jsObject.trigger;
             }
+
+            if (jsObject.userData == undefined) {
+                jsObject.userData = 0;
+            }
         },
 
         newItem: async (eventHandlers: EventHandler[]) => {
             const project = ProjectEditor.getProject(eventHandlers);
 
-            const eventEnumItems = getEventEnumItems(eventHandlers, undefined);
-
-            if (eventEnumItems.length == 0) {
+            if (
+                getEventEnumItems(eventHandlers, {
+                    handlerType: "action"
+                } as any).length +
+                    getEventEnumItems(eventHandlers, {
+                        handlerType: "flow"
+                    } as any).length ==
+                0
+            ) {
                 notification.info("All event handlers are already defined");
                 return;
             }
+
+            function getActions() {
+                return project.actions.map(action => ({
+                    id: action.name,
+                    label: action.name
+                }));
+            }
+            const actionEnumItems = observable.box<EnumItems>([]);
+            actionEnumItems.set(getActions());
+
+            let onChangeCallback: (fieldProperties: any, value: any) => void;
+
+            const actionProperty: IFieldProperties = {
+                name: "action",
+                type: "enum",
+                enumItems: actionEnumItems,
+                inputGroupButton: (
+                    <button
+                        className="btn btn-primary"
+                        onClick={async event => {
+                            event.preventDefault();
+
+                            try {
+                                const action = (await ProjectEditor.ActionClass
+                                    .classInfo.newItem!(
+                                    project.actions
+                                )) as Action;
+
+                                if (action) {
+                                    project._store.addObject(
+                                        project.actions,
+                                        action
+                                    );
+
+                                    runInAction(() => {
+                                        onChangeCallback(
+                                            actionProperty,
+                                            action.name
+                                        );
+
+                                        actionEnumItems.set(getActions());
+                                    });
+                                }
+                            } catch (err) {}
+                        }}
+                    >
+                        New Action
+                    </button>
+                ),
+                visible: (values: any) => {
+                    return values.handlerType == "action";
+                }
+            };
 
             const result = await showGenericDialog({
                 dialogDefinition: {
@@ -2539,7 +2664,8 @@ export class EventHandler extends EezObject {
                             name: "eventName",
                             displayName: "Event",
                             type: "enum",
-                            enumItems: eventEnumItems
+                            enumItems: (values: any) =>
+                                getEventEnumItems(eventHandlers, values)
                         },
                         {
                             name: "handlerType",
@@ -2551,15 +2677,12 @@ export class EventHandler extends EezObject {
                             visible: () =>
                                 project.projectTypeTraits.hasFlowSupport
                         },
+                        actionProperty,
                         {
-                            name: "action",
-                            type: "enum",
-                            enumItems: project.actions.map(action => ({
-                                id: action.name,
-                                label: action.name
-                            })),
+                            name: "userData",
+                            type: "number",
                             visible: (values: any) => {
-                                return values.handlerType == "action";
+                                return project.projectTypeTraits.isLVGL;
                             }
                         }
                     ]
@@ -2567,9 +2690,13 @@ export class EventHandler extends EezObject {
                 values: {
                     handlerType: project.projectTypeTraits.hasFlowSupport
                         ? "flow"
-                        : "action"
+                        : "action",
+                    userData: 0
                 },
-                dialogContext: project
+                dialogContext: project,
+                setOnChangeCallback: callback => {
+                    onChangeCallback = callback;
+                }
             });
 
             const properties: Partial<EventHandler> = {
@@ -2577,6 +2704,10 @@ export class EventHandler extends EezObject {
                 handlerType: result.values.handlerType,
                 action: result.values.action
             };
+
+            if (project.projectTypeTraits.isLVGL) {
+                properties.userData = result.values.userData;
+            }
 
             const eventHandler = createObject<EventHandler>(
                 project._store,
@@ -2608,6 +2739,23 @@ export class EventHandler extends EezObject {
     }
 
     get eventParamExpressionType() {
+        const widget = getAncestorOfType(
+            this,
+            ProjectEditor.WidgetClass.classInfo
+        );
+        if (widget) {
+            const classInfo = getClassInfo(widget);
+            if (classInfo.overrideEventParamExpressionType) {
+                const valueType = classInfo.overrideEventParamExpressionType(
+                    widget,
+                    this.eventName
+                );
+                if (valueType != undefined) {
+                    return valueType;
+                }
+            }
+        }
+
         return getWidgetEvents(this)[this.eventName].paramExpressionType;
     }
 }
@@ -2622,7 +2770,6 @@ export const eventHandlersProperty: PropertyInfo = {
     name: "eventHandlers",
     type: PropertyType.Array,
     typeClass: EventHandler,
-    arrayItemOrientation: "vertical",
     propertyGridGroup: eventsGroup,
     partOfNavigation: false,
     enumerable: false,
@@ -2681,7 +2828,8 @@ export class Widget extends Component {
                 displayName: `Hide "Widget is outside of its parent" warning`,
                 type: PropertyType.Boolean,
                 propertyGridGroup: geometryGroup,
-                disabled: component => isLVGLProject(component)
+                disabled: component => isLVGLProject(component),
+                hideInPropertyGrid: isWidgetUnderDockingManager
             },
             {
                 name: "locked",
@@ -2711,7 +2859,10 @@ export class Widget extends Component {
                 computed: true,
                 skipSearch: true,
                 hideInPropertyGrid: (widget: Widget) =>
-                    !isTimelineEditorActive(widget)
+                    !ProjectEditor.getProject(widget).projectTypeTraits
+                        .hasFlowSupport ||
+                    !isTimelineEditorActive(widget) ||
+                    isWidgetUnderDockingManager(widget)
             },
             makeExpressionProperty(
                 {
@@ -2776,18 +2927,30 @@ export class Widget extends Component {
 
             const classInfo = getClassInfo(object);
 
-            if (classInfo.widgetEvents) {
+            if (
+                classInfo.widgetEvents &&
+                typeof classInfo.widgetEvents == "object"
+            ) {
                 if (jsObject.action) {
                     for (const eventName of Object.keys(
                         classInfo.widgetEvents
                     )) {
                         const eventDef = classInfo.widgetEvents[eventName];
                         if (eventDef.oldName == "action") {
-                            jsObject.eventHandlers.push({
-                                eventName,
-                                handlerType: "action",
-                                action: jsObject.action
-                            });
+                            if (
+                                !jsObject.eventHandlers.find(
+                                    (eventHandler: EventHandler) =>
+                                        eventHandler.eventName == eventName &&
+                                        eventHandler.handlerType == "action" &&
+                                        eventHandler.action == jsObject.action
+                                )
+                            ) {
+                                jsObject.eventHandlers.push({
+                                    eventName,
+                                    handlerType: "action",
+                                    action: jsObject.action
+                                });
+                            }
                             break;
                         }
                     }
@@ -2802,15 +2965,24 @@ export class Widget extends Component {
                         )) {
                             const eventDef = classInfo.widgetEvents[eventName];
                             if (eventDef.oldName == asOutputProperty) {
-                                jsObject.eventHandlers.push({
-                                    eventName,
-                                    handlerType: "flow"
-                                });
-                                wireSourceChanged(
-                                    object,
-                                    asOutputProperty,
-                                    eventName
-                                );
+                                if (
+                                    !jsObject.eventHandlers.find(
+                                        (eventHandler: EventHandler) =>
+                                            eventHandler.eventName ==
+                                                eventName &&
+                                            eventHandler.handlerType == "flow"
+                                    )
+                                ) {
+                                    jsObject.eventHandlers.push({
+                                        eventName,
+                                        handlerType: "flow"
+                                    });
+                                    wireSourceChanged(
+                                        object,
+                                        asOutputProperty,
+                                        eventName
+                                    );
+                                }
                                 break;
                             }
                         }
@@ -2921,6 +3093,93 @@ export class Widget extends Component {
                         })
                     );
                 }
+
+                if (objects.length === 1) {
+                    additionalMenuItems.push(
+                        new MenuItem({
+                            label: "Resize...",
+                            click: async () => {
+                                const widget = objects[0] as Widget;
+
+                                const result = await showGenericDialog({
+                                    dialogDefinition: {
+                                        title: "Resize Widget",
+                                        fields: [
+                                            {
+                                                name: "width",
+                                                type: "number"
+                                            },
+                                            {
+                                                name: "height",
+                                                type: "number"
+                                            }
+                                        ]
+                                    },
+                                    values: {
+                                        width: widget.width,
+                                        height: widget.height
+                                    }
+                                });
+
+                                const newWidth = result.values.width;
+                                const newHeight = result.values.height;
+
+                                const projectStore = project._store;
+                                projectStore.undoManager.setCombineCommands(
+                                    true
+                                );
+
+                                const scaleHorz = newWidth / widget.width;
+                                const scaleVert = newHeight / widget.height;
+
+                                function resizeWidget(widget: Widget) {
+                                    if (
+                                        widget instanceof
+                                            ProjectEditor.ContainerWidgetClass ||
+                                        widget instanceof
+                                            ProjectEditor.SelectWidgetClass
+                                    ) {
+                                        for (const childWidget of widget.widgets) {
+                                            const left = Math.floor(
+                                                childWidget.left * scaleHorz
+                                            );
+                                            const top = Math.floor(
+                                                childWidget.top * scaleVert
+                                            );
+
+                                            const width = Math.floor(
+                                                childWidget.width * scaleHorz
+                                            );
+                                            const height = Math.floor(
+                                                childWidget.height * scaleVert
+                                            );
+
+                                            updateObject(childWidget, {
+                                                left,
+                                                top,
+                                                width,
+                                                height
+                                            });
+
+                                            resizeWidget(childWidget);
+                                        }
+                                    }
+                                }
+
+                                updateObject(widget, {
+                                    width: newWidth,
+                                    height: newHeight
+                                });
+
+                                resizeWidget(widget);
+
+                                projectStore.undoManager.setCombineCommands(
+                                    false
+                                );
+                            }
+                        })
+                    );
+                }
             }
 
             if (additionalMenuItems.length > 0) {
@@ -2995,7 +3254,7 @@ export class Widget extends Component {
 
                     if (
                         object.left + object.width >
-                        getWidgetParent(object).width
+                        getWidgetParent(object).rect.width
                     ) {
                         messages.push(
                             new Message(
@@ -3008,7 +3267,7 @@ export class Widget extends Component {
 
                     if (
                         object.top + object.height >
-                        getWidgetParent(object).height
+                        getWidgetParent(object).rect.height
                     ) {
                         messages.push(
                             new Message(
@@ -3062,50 +3321,24 @@ export class Widget extends Component {
             return !widget.locked && !getTimelineEditorState(widget);
         },
 
-        getAdditionalFlowProperties: (widget: Widget) => {
-            const additionalProperties: PropertyInfo[] = [];
-
-            const classInfo = getClassInfo(widget);
-
-            for (const propertyInfo of classInfo.properties) {
-                if (
-                    propertyInfo.type == PropertyType.Object &&
-                    propertyInfo.typeClass == Style
-                ) {
-                    const style = (widget as any)[propertyInfo.name] as Style;
-
-                    if (style.conditionalStyles) {
-                        for (
-                            let index = 0;
-                            index < style.conditionalStyles.length;
-                            index++
-                        ) {
-                            additionalProperties.push(
-                                Object.assign(
-                                    {},
-                                    ProjectEditor.conditionalStyleConditionProperty,
-                                    {
-                                        name: `${propertyInfo.name}.${conditionalStylesProperty.name}[${index}].${ProjectEditor.conditionalStyleConditionProperty.name}`
-                                    }
-                                )
-                            );
-                        }
-                    }
-                }
-            }
-
-            return additionalProperties;
-        },
+        getAdditionalFlowProperties: getAdditionalStyleFlowProperties,
 
         execute: (context: IDashboardComponentContext) => {
             if (context.getOutputType("@widget")) {
-                context.propagateValue(
-                    "@widget",
-                    context.WasmFlowRuntime.getWidgetHandle(
+                if (
+                    !context.WasmFlowRuntime.hasWidgetHandle(
                         context.flowStateIndex,
                         context.getComponentIndex()
                     )
-                );
+                ) {
+                    context.propagateValue(
+                        "@widget",
+                        context.WasmFlowRuntime.getWidgetHandle(
+                            context.flowStateIndex,
+                            context.getComponentIndex()
+                        )
+                    );
+                }
             }
         },
 
@@ -3140,8 +3373,23 @@ export class Widget extends Component {
             hiddenInEditor: observable,
             timeline: observable,
             eventHandlers: observable,
-            outputWidgetHandle: observable
+            outputWidgetHandle: observable,
+
+            isHiddenInEditorDeep: computed
         });
+    }
+
+    get isHiddenInEditorDeep() {
+        if (this.hiddenInEditor) {
+            return true;
+        }
+
+        const parent = getWidgetParent(this);
+        if (parent instanceof Widget) {
+            return parent.hiddenInEditor;
+        }
+
+        return false;
     }
 
     get styleObject() {
@@ -3193,14 +3441,12 @@ export class Widget extends Component {
     }
 
     getDefaultActionEventName() {
-        const classInfo = getClassInfo(this);
+        const widgetEvents = getWidgetEvents(this);
 
-        if (classInfo.widgetEvents) {
-            for (const eventName of Object.keys(classInfo.widgetEvents)) {
-                const eventDef = classInfo.widgetEvents[eventName];
-                if (eventDef.oldName == "action") {
-                    return eventName;
-                }
+        for (const eventName of Object.keys(widgetEvents)) {
+            const eventDef = widgetEvents[eventName];
+            if (eventDef.oldName == "action") {
+                return eventName;
             }
         }
 
@@ -3670,7 +3916,8 @@ export class Widget extends Component {
             "eez-widget",
             this.type,
             this.style.classNames,
-            this.style.getConditionalClassNames(flowContext)
+            this.style.getConditionalClassNames(flowContext),
+            this.style.getDynamicCSSClassName(flowContext)
         );
     }
 
@@ -3754,11 +4001,13 @@ export class Widget extends Component {
         return getTimelineRect(this, timelinePosition);
     }
 
-    lvglCreate(runtime: LVGLPageRuntime, parentObj: number) {
+    lvglCreate(
+        runtime: LVGLPageRuntime,
+        parentObj: number,
+        customWidget?: ICustomWidgetCreateParams
+    ) {
         return 0;
     }
-
-    lvglPostCreate(runtime: LVGLPageRuntime) {}
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -3867,8 +4116,14 @@ function renderActionComponent(
 
     let titleStyle: React.CSSProperties | undefined;
     if (classInfo.componentHeaderColor) {
+        let backgroundColor;
+        if (typeof classInfo.componentHeaderColor == "string") {
+            backgroundColor = classInfo.componentHeaderColor;
+        } else {
+            backgroundColor = classInfo.componentHeaderColor(actionNode);
+        }
         titleStyle = {
-            backgroundColor: classInfo.componentHeaderColor
+            backgroundColor
         };
     }
 
@@ -3922,6 +4177,14 @@ function renderActionComponent(
                     {executionStateInfo}
                     <span className="title-text">{getLabel(actionNode)}</span>
                 </div>
+                {actionNode instanceof
+                    ProjectEditor.CommentActionComponentClass &&
+                    actionNode.collapsed && (
+                        <Icon
+                            icon="material:arrow_drop_down"
+                            style={{ opacity: 0.5 }}
+                        />
+                    )}
                 {seqOutputIndex != -1 && (
                     <ComponentOutputSpan
                         componentOutput={actionNode.outputs[seqOutputIndex]}
@@ -3959,7 +4222,9 @@ function renderActionComponent(
                         // body
                         body ? (
                             <div
-                                className="eez-flow-editor-capture-pointers"
+                                className={
+                                    /*"eez-flow-editor-capture-pointers"*/ undefined
+                                }
                                 style={{ width: "100%" }}
                             >
                                 {body}
@@ -4378,6 +4643,16 @@ export function createActionComponentClass(
         }
 
         getOutputs(): ComponentOutput[] {
+            let outputs: ComponentOutput[];
+
+            if (typeof actionComponentDefinition.outputs == "function") {
+                outputs = actionComponentDefinition.outputs(
+                    ...(this?._props ?? [])
+                );
+            } else {
+                outputs = actionComponentDefinition.outputs;
+            }
+
             return [
                 {
                     name: "@seqout",
@@ -4385,7 +4660,7 @@ export function createActionComponentClass(
                     isSequenceOutput: true,
                     isOptionalOutput: true
                 },
-                ...actionComponentDefinition.outputs,
+                ...outputs,
                 ...super.getOutputs()
             ];
         }
@@ -4519,7 +4794,7 @@ function isActionComponent(component: Component) {
     return component instanceof ActionComponent;
 }
 
-function checkProperty(
+export function checkProperty(
     projectStore: ProjectStore,
     component: Component,
     messages: IMessage[],

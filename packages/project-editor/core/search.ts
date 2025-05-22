@@ -19,7 +19,10 @@ import {
     getAncestorOfType
 } from "project-editor/store";
 
-import type { checkObjectReference } from "project-editor/project/project";
+import type {
+    checkObjectReference,
+    ImportDirective
+} from "project-editor/project/project";
 import { ProjectEditor } from "project-editor/project-editor-interface";
 
 import { expressionParser } from "project-editor/flow/expression/parser";
@@ -29,7 +32,7 @@ import {
     visitExpressionNodes
 } from "project-editor/flow/expression/helper";
 import type {
-    IdentifierExpressionNode,
+    ExpressionNode,
     IdentifierType
 } from "project-editor/flow/expression/node";
 
@@ -52,7 +55,10 @@ import type {
 
 ////////////////////////////////////////////////////////////////////////////////
 
-function isPropertySearchable(object: IEezObject, propertyInfo: PropertyInfo) {
+export function isPropertySearchable(
+    object: IEezObject,
+    propertyInfo: PropertyInfo
+) {
     if (propertyInfo.skipSearch) {
         return false;
     }
@@ -68,8 +74,9 @@ function isPropertySearchable(object: IEezObject, propertyInfo: PropertyInfo) {
 
 type VisitResult = EezValueObject | null;
 
-function* visitWithPause(
-    parentObject: IEezObject
+export function* visitWithPause(
+    parentObject: IEezObject,
+    includeAdditionObjects?: IEezObject[]
 ): IterableIterator<VisitResult> {
     if (isEezObjectArray(parentObject)) {
         let arrayOfObjects = parentObject as IEezObject[];
@@ -105,12 +112,19 @@ function* visitWithPause(
         }
     }
 
+    if (includeAdditionObjects) {
+        for (let i = 0; i < includeAdditionObjects.length; i++) {
+            yield* visitWithPause(includeAdditionObjects[i]);
+        }
+    }
+
     // pause
     yield null;
 }
 
 function* visitWithoutPause(
-    parentObject: IEezObject
+    parentObject: IEezObject,
+    includeAdditionObjects?: IEezObject[]
 ): IterableIterator<VisitResult> {
     if (isEezObjectArray(parentObject)) {
         let arrayOfObjects = parentObject as IEezObject[];
@@ -143,6 +157,12 @@ function* visitWithoutPause(
                     }
                 }
             }
+        }
+    }
+
+    if (includeAdditionObjects) {
+        for (let i = 0; i < includeAdditionObjects.length; i++) {
+            yield* visitWithoutPause(includeAdditionObjects[i]);
         }
     }
 }
@@ -255,6 +275,205 @@ export function* searchForPattern(
     }
 }
 
+export function* searchForObjectDependencies(
+    projectStore: ProjectStore,
+    root: IEezObject,
+    withPause: boolean,
+    lookInsideExpressions: boolean,
+    includeAdditionObjects?: IEezObject[]
+): IterableIterator<
+    | { kind: "object-reference"; valueObject: EezValueObject }
+    | { kind: "configuration-reference"; valueObject: EezValueObject }
+    | { kind: "expression-start"; valueObject: EezValueObject }
+    | {
+          kind: "expression-node";
+          valueObject: EezValueObject;
+          node: ExpressionNode;
+          expressionStartIndex: number;
+      }
+    | { kind: "expression-end"; valueObject: EezValueObject }
+    | { kind: "variable-type"; valueObject: EezValueObject }
+    | null
+> {
+    let v = (withPause ? visitWithPause : visitWithoutPause)(
+        root,
+        includeAdditionObjects
+    );
+
+    while (true) {
+        let visitResult = v.next();
+        if (visitResult.done) {
+            return;
+        }
+
+        let valueObject = visitResult.value;
+        if (valueObject) {
+            if (!valueObject.value) {
+                continue;
+            }
+
+            if (
+                !isPropertySearchable(
+                    getParent(valueObject),
+                    valueObject.propertyInfo
+                ) ||
+                !valueObject.value
+            ) {
+                continue;
+            }
+
+            let flowProperty;
+            if (valueObject.propertyInfo.flowProperty) {
+                if (typeof valueObject.propertyInfo.flowProperty == "string") {
+                    flowProperty = valueObject.propertyInfo.flowProperty;
+                } else {
+                    flowProperty = valueObject.propertyInfo.flowProperty(
+                        getParent(valueObject)
+                    );
+                }
+            }
+
+            if (
+                ((valueObject.propertyInfo.type ===
+                    PropertyType.ObjectReference ||
+                    (valueObject.propertyInfo.type === PropertyType.Enum &&
+                        valueObject.propertyInfo
+                            .referencedObjectCollectionPath)) &&
+                    (!projectStore.project.projectTypeTraits.hasFlowSupport ||
+                        flowProperty == undefined)) ||
+                valueObject.propertyInfo.type === PropertyType.ThemedColor
+            ) {
+                yield {
+                    kind: "object-reference",
+                    valueObject
+                };
+            } else if (
+                valueObject.propertyInfo.type ===
+                PropertyType.ConfigurationReference
+            ) {
+                yield {
+                    kind: "configuration-reference",
+                    valueObject
+                };
+            } else if (
+                (flowProperty &&
+                    valueObject.propertyInfo.expressionType != undefined) ||
+                flowProperty == "scpi-template-literal"
+            ) {
+                if (lookInsideExpressions) {
+                    let value = valueObject.value;
+                    if (typeof value != "string") {
+                        value = valueObject.value.toString();
+                    }
+
+                    yield {
+                        kind: "expression-start",
+                        valueObject
+                    };
+
+                    const component = getAncestorOfType<Component>(
+                        valueObject,
+                        ProjectEditor.ComponentClass.classInfo
+                    );
+                    let expressions;
+
+                    if (flowProperty && flowProperty == "template-literal") {
+                        expressions = templateLiteralToExpressions(value).map(
+                            expression => ({
+                                start: expression.start + 1,
+                                end: expression.end - 1
+                            })
+                        );
+                    } else if (
+                        flowProperty &&
+                        flowProperty == "scpi-template-literal"
+                    ) {
+                        expressions = [];
+
+                        try {
+                            const parts = parseScpi(value);
+                            for (const part of parts) {
+                                const tag = part.tag;
+                                const str = part.value!;
+
+                                if (tag == SCPI_PART_EXPR) {
+                                    expressions.push({
+                                        start: part.token.offset + 1,
+                                        end: part.token.offset + str.length - 1
+                                    });
+                                } else if (
+                                    tag == SCPI_PART_QUERY_WITH_ASSIGNMENT
+                                ) {
+                                    if (str[0] == "{") {
+                                        expressions.push({
+                                            start: part.token.offset + 1,
+                                            end:
+                                                part.token.offset +
+                                                str.length -
+                                                1
+                                        });
+                                    } else {
+                                        expressions.push({
+                                            start: part.token.offset,
+                                            end: part.token.offset + str.length
+                                        });
+                                    }
+                                }
+                            }
+                        } catch (err) {
+                            expressions = [];
+                        }
+                    } else {
+                        expressions = [{ start: 0, end: value.length }];
+                    }
+
+                    for (const expression of expressions) {
+                        try {
+                            const rootNode = expressionParser.parse(
+                                value.substring(
+                                    expression.start,
+                                    expression.end
+                                )
+                            );
+
+                            findValueTypeInExpressionNode(
+                                projectStore.project,
+                                component,
+                                rootNode,
+                                flowProperty == "assignable"
+                            );
+
+                            for (const node of visitExpressionNodes(rootNode)) {
+                                yield {
+                                    kind: "expression-node",
+                                    valueObject,
+                                    node,
+                                    expressionStartIndex: expression.start
+                                };
+                            }
+                        } catch (err) {
+                            console.error(err);
+                        }
+                    }
+
+                    yield {
+                        kind: "expression-end",
+                        valueObject
+                    };
+                }
+            } else if (valueObject.propertyInfo == variableTypeProperty) {
+                yield {
+                    kind: "variable-type",
+                    valueObject
+                };
+            }
+        } else if (withPause) {
+            // pause
+            yield null;
+        }
+    }
+}
+
 export function* searchForReference(
     root: IEezObject,
     searchParams: SearchParamsObject,
@@ -268,8 +487,10 @@ export function* searchForReference(
     let identifierType: IdentifierType | undefined;
     let structType: ValueType | undefined;
     let enumType: ValueType | undefined;
-
-    if (object instanceof ProjectEditor.VariableClass) {
+    if (
+        object instanceof ProjectEditor.VariableClass ||
+        object instanceof ProjectEditor.UserPropertyClass
+    ) {
         let flow = getAncestorOfType(object, ProjectEditor.FlowClass.classInfo);
         if (flow) {
             identifierType = "local-variable";
@@ -308,15 +529,10 @@ export function* searchForReference(
         identifierType = "imported-project";
     }
 
-    let v = (withPause ? visitWithPause : visitWithoutPause)(root);
-
     let objectName;
     let objectParentPath;
-
     const classInfo = getClassInfo(object);
-
     let importedProject;
-
     if (classInfo.getImportedProject) {
         importedProject = classInfo.getImportedProject(object);
         if (!importedProject) {
@@ -338,51 +554,32 @@ export function* searchForReference(
         if (object instanceof ProjectEditor.StyleClass) {
             objectParentPath = "allStyles";
         } else if (object instanceof ProjectEditor.LVGLStyleClass) {
-            objectParentPath = "lvglStyles/allStyles";
+            objectParentPath = "allLvglStyles";
         } else {
             objectParentPath = getObjectPath(objectParent).join("/");
         }
     }
 
+    let v = searchForObjectDependencies(
+        project._store,
+        root,
+        withPause,
+        identifierType != undefined || structType != undefined,
+        searchParams.includeAdditionObjects
+    );
     while (true) {
         let visitResult = v.next();
         if (visitResult.done) {
             return;
         }
 
-        let valueObject = visitResult.value;
-        if (valueObject) {
-            if (
-                !isPropertySearchable(
-                    getParent(valueObject),
-                    valueObject.propertyInfo
-                ) ||
-                !valueObject.value
-            ) {
-                continue;
-            }
-
+        let dependency = visitResult.value;
+        if (dependency) {
             let match = false;
 
-            let flowProperty;
-            if (valueObject.propertyInfo.flowProperty) {
-                if (typeof valueObject.propertyInfo.flowProperty == "string") {
-                    flowProperty = valueObject.propertyInfo.flowProperty;
-                } else {
-                    flowProperty =
-                        valueObject.propertyInfo.flowProperty(object);
-                }
-            }
+            const valueObject = dependency.valueObject;
 
-            if (
-                (valueObject.propertyInfo.type ===
-                    PropertyType.ObjectReference &&
-                    (!project.projectTypeTraits.hasFlowSupport ||
-                        valueObject.propertyInfo
-                            .referencedObjectCollectionPath !=
-                            "variables/globalVariables")) ||
-                valueObject.propertyInfo.type === PropertyType.ThemedColor
-            ) {
+            if (dependency.kind == "object-reference") {
                 if (importedProject) {
                     if (
                         valueObject.propertyInfo.referencedObjectCollectionPath
@@ -420,10 +617,7 @@ export function* searchForReference(
                         }
                     }
                 }
-            } else if (
-                valueObject.propertyInfo.type ===
-                PropertyType.ConfigurationReference
-            ) {
+            } else if (dependency.kind == "configuration-reference") {
                 if (
                     valueObject.propertyInfo.referencedObjectCollectionPath ==
                         objectParentPath &&
@@ -436,148 +630,49 @@ export function* searchForReference(
                         }
                     }
                 }
-            } else if (
-                valueObject.propertyInfo.expressionType != undefined ||
-                flowProperty == "scpi-template-literal"
-            ) {
-                if (identifierType || structType) {
-                    const component = getAncestorOfType<Component>(
-                        valueObject,
-                        ProjectEditor.ComponentClass.classInfo
-                    );
-                    let expressions;
+            } else if (dependency.kind == "expression-start") {
+                valueObject.foundPositions = [];
+            } else if (dependency.kind == "expression-node") {
+                const node = dependency.node;
 
-                    if (flowProperty && flowProperty == "template-literal") {
-                        expressions = templateLiteralToExpressions(
-                            valueObject.value
-                        ).map(expression => ({
-                            start: expression.start + 1,
-                            end: expression.end - 1
-                        }));
-                    } else if (
-                        flowProperty &&
-                        flowProperty == "scpi-template-literal"
+                if (node.type == "Identifier") {
+                    if (
+                        node.identifierType === identifierType &&
+                        (identifierType != "enum-member" ||
+                            node.valueType == enumType) &&
+                        node.name == objectName
                     ) {
-                        expressions = [];
-
-                        try {
-                            const parts = parseScpi(valueObject.value);
-                            for (const part of parts) {
-                                const tag = part.tag;
-                                const str = part.value!;
-
-                                if (tag == SCPI_PART_EXPR) {
-                                    expressions.push({
-                                        start: part.token.offset + 1,
-                                        end: part.token.offset + str.length - 1
-                                    });
-                                } else if (
-                                    tag == SCPI_PART_QUERY_WITH_ASSIGNMENT
-                                ) {
-                                    if (str[0] == "{") {
-                                        expressions.push({
-                                            start: part.token.offset + 1,
-                                            end:
-                                                part.token.offset +
-                                                str.length -
-                                                1
-                                        });
-                                    } else {
-                                        expressions.push({
-                                            start: part.token.offset,
-                                            end: part.token.offset + str.length
-                                        });
-                                    }
-                                }
-                            }
-                        } catch (err) {
-                            expressions = [];
-                        }
-                    } else {
-                        expressions = [
-                            { start: 0, end: valueObject.value.length }
-                        ];
+                        valueObject.foundPositions!.push({
+                            start:
+                                node.location.start.offset +
+                                dependency.expressionStartIndex,
+                            end:
+                                node.location.end.offset +
+                                dependency.expressionStartIndex
+                        });
                     }
-
-                    for (const expression of expressions) {
-                        try {
-                            const rootNode = expressionParser.parse(
-                                valueObject.value.substring(
-                                    expression.start,
-                                    expression.end
-                                )
-                            );
-
-                            findValueTypeInExpressionNode(
-                                project,
-                                component,
-                                rootNode,
-                                flowProperty == "assignable"
-                            );
-
-                            const foundExpressionNodes: IdentifierExpressionNode[] =
-                                [];
-
-                            for (const node of visitExpressionNodes(rootNode)) {
-                                if (node.type == "Identifier") {
-                                    if (
-                                        node.identifierType ===
-                                            identifierType &&
-                                        (identifierType != "enum-member" ||
-                                            node.valueType == enumType) &&
-                                        node.name == objectName
-                                    ) {
-                                        node.location.start.offset +=
-                                            expression.start;
-
-                                        node.location.end.offset +=
-                                            expression.start;
-
-                                        foundExpressionNodes.push(node);
-                                    }
-                                } else if (node.type == "MemberExpression") {
-                                    if (
-                                        node.object.type == "Identifier" &&
-                                        node.object.valueType == structType &&
-                                        node.property.type == "Identifier" &&
-                                        node.property.name == objectName
-                                    ) {
-                                        node.property.location.start.offset +=
-                                            expression.start;
-
-                                        node.property.location.end.offset +=
-                                            expression.start;
-
-                                        foundExpressionNodes.push(
-                                            node.property
-                                        );
-                                    }
-                                }
-                            }
-
-                            if (foundExpressionNodes.length > 0) {
-                                match = true;
-
-                                const foundPositions = foundExpressionNodes.map(
-                                    node => ({
-                                        start: node.location.start.offset,
-                                        end: node.location.end.offset
-                                    })
-                                );
-
-                                if (!valueObject.foundPositions) {
-                                    valueObject.foundPositions = foundPositions;
-                                } else {
-                                    valueObject.foundPositions = [
-                                        ...valueObject.foundPositions,
-                                        ...foundPositions
-                                    ];
-                                }
-                            }
-                        } catch (err) {}
+                } else if (node.type == "MemberExpression") {
+                    if (
+                        node.object.type == "Identifier" &&
+                        node.object.valueType == structType &&
+                        node.property.type == "Identifier" &&
+                        node.property.name == objectName
+                    ) {
+                        valueObject.foundPositions!.push({
+                            start:
+                                node.property.location.start.offset +
+                                dependency.expressionStartIndex,
+                            end:
+                                node.property.location.end.offset +
+                                dependency.expressionStartIndex
+                        });
                     }
                 }
-            } else if (valueObject.propertyInfo == variableTypeProperty) {
+            } else if (dependency.kind == "expression-end") {
+                if (valueObject.foundPositions!.length > 0) {
+                    match = true;
+                }
+            } else if (dependency.kind == "variable-type") {
                 if (object instanceof ProjectEditor.StructureClass) {
                     if (valueObject.value == `struct:${objectName}`) {
                         valueObject.foundPositions = [
@@ -709,6 +804,7 @@ export interface SearchParamsPattern {
 export interface SearchParamsObject {
     type: "object";
     object: IEezObject;
+    includeAdditionObjects?: IEezObject[];
 }
 
 export interface SearchParamsReferences {
@@ -811,12 +907,24 @@ export function startNewSearch(
     projectStore.currentSearch.startNewSearch(searchParams);
 }
 
-export function usage(
+export function importDirectiveUsage(
     projectStore: ProjectStore,
     searchCallback: SearchCallback
 ) {
     startNewSearch(projectStore, {
         type: "references",
+        searchCallback
+    });
+}
+
+export function importDirectiveUsageWithImportAs(
+    projectStore: ProjectStore,
+    importDirective: ImportDirective,
+    searchCallback: SearchCallback
+) {
+    startNewSearch(projectStore, {
+        type: "object",
+        object: importDirective,
         searchCallback
     });
 }
@@ -842,11 +950,15 @@ export function isReferenced(object: IEezObject) {
     }
 }
 
-export function replaceObjectReference(object: IEezObject, newValue: string) {
+export function replaceObjectReference(
+    object: IEezObject,
+    newValue: string,
+    includeAdditionObjects?: IEezObject[]
+) {
     const rootObject = getRootObject(object);
     let resultsGenerator = searchForReference(
         rootObject,
-        { type: "object", object },
+        { type: "object", object, includeAdditionObjects },
         false
     );
 

@@ -72,6 +72,7 @@ import {
 } from "project-editor/flow/runtime/wasm-worker";
 import { DashboardComponentContext } from "project-editor/flow/runtime/worker-dashboard-component-context";
 import type { PlotlyLineChartExecutionState } from "../widgets/dashboard/plotly";
+import type { TabulatorExecutionState } from "../widgets/dashboard/tabulator";
 
 ////////////////////////////////////////////////////////////////////////////////
 
@@ -96,7 +97,6 @@ export class SCPIActionComponent extends ActionComponent {
                     type: PropertyType.MultilineText,
                     propertyGridGroup: specificGroup,
                     monospaceFont: true,
-                    disableSpellcheck: true,
                     flowProperty: "scpi-template-literal",
                     expressionType: undefined,
                     getInstrumentId: (component: SCPIActionComponent) => {
@@ -1187,7 +1187,7 @@ registerClass(
 export class AddToInstrumentHistoryActionComponent extends ActionComponent {
     static ITEM_TYPE_NONE = 0;
     static ITEM_TYPE_EEZ_CHART = 1;
-    static ITEM_TYPE_PLOTLY = 2;
+    static ITEM_TYPE_WIDGET = 2;
 
     static classInfo = makeDerivedClassInfo(ActionComponent.classInfo, {
         properties: [
@@ -1208,8 +1208,8 @@ export class AddToInstrumentHistoryActionComponent extends ActionComponent {
                         label: "EEZ-Chart"
                     },
                     {
-                        id: "plotly",
-                        label: "Plotly"
+                        id: "widget",
+                        label: "Widget"
                     }
                 ],
                 propertyGridGroup: specificGroup
@@ -1426,19 +1426,35 @@ export class AddToInstrumentHistoryActionComponent extends ActionComponent {
             ),
             makeExpressionProperty(
                 {
-                    name: "plotlyWidget",
+                    name: "widget",
                     type: PropertyType.MultilineText,
                     propertyGridGroup: specificGroup,
                     disabled: (
                         component: AddToInstrumentHistoryActionComponent
                     ) => {
-                        return component.itemType != "plotly";
+                        return component.itemType != "widget";
                     }
                 },
                 "widget"
             )
         ],
         defaultValue: {},
+        beforeLoadHook: (
+            component: AddToInstrumentHistoryActionComponent,
+            jsObject: any
+        ) => {
+            if (
+                jsObject.itemType == "plotly" ||
+                jsObject.itemType == "tabulator"
+            ) {
+                jsObject.itemType = "widget";
+            }
+
+            if (jsObject.plotlyWidget != undefined) {
+                jsObject.widget = jsObject.plotlyWidget;
+                delete jsObject.plotlyWidget;
+            }
+        },
         icon: (
             <svg
                 xmlns="http://www.w3.org/2000/svg"
@@ -1483,7 +1499,7 @@ export class AddToInstrumentHistoryActionComponent extends ActionComponent {
                     return;
                 }
 
-                const chartData = context.evalProperty<Uint8Array>("chartData");
+                chartData = context.evalProperty<Uint8Array>("chartData");
                 if (chartData == undefined) {
                     context.throwError(`Invalid Chart data property`);
                     return;
@@ -1617,7 +1633,7 @@ export class AddToInstrumentHistoryActionComponent extends ActionComponent {
                     return;
                 }
 
-                const message: any = {
+                message = {
                     state: "success",
                     fileType: { mime: "application/eez-raw" },
                     description: chartDescription,
@@ -1645,49 +1661,50 @@ export class AddToInstrumentHistoryActionComponent extends ActionComponent {
                         }
                     },
                     horizontalScale: chartHorizontalScale,
-                    verticalScale: chartVerticalScale
+                    verticalScale: chartVerticalScale,
+                    dataLength: chartData.length
                 };
-
-                message.dataLength = chartData.length;
 
                 historyItemType = "instrument/file-download";
             } else if (
                 itemType ==
-                AddToInstrumentHistoryActionComponent.ITEM_TYPE_PLOTLY
+                AddToInstrumentHistoryActionComponent.ITEM_TYPE_WIDGET
             ) {
-                const plotlyWidget =
-                    context.evalProperty<number>("plotlyWidget");
-                if (plotlyWidget == undefined) {
-                    context.throwError(`Invalid Plotly widget property`);
+                const widget = context.evalProperty<number>("widget");
+                if (widget == undefined) {
+                    context.throwError(`Invalid widget property`);
                     return;
                 }
 
                 const widgetInfo =
-                    context.WasmFlowRuntime.getWidgetHandleInfo(plotlyWidget);
+                    context.WasmFlowRuntime.getWidgetHandleInfo(widget);
 
                 if (!widgetInfo) {
-                    context.throwError(`Invalid Plotly widget handle`);
+                    context.throwError(`Invalid widget handle`);
                     return;
                 }
 
-                const plotlyWidgetContext = new DashboardComponentContext(
+                const widgetContext = new DashboardComponentContext(
                     context.WasmFlowRuntime,
                     widgetInfo.flowStateIndex,
                     widgetInfo.componentIndex
                 );
 
-                const executionState =
-                    plotlyWidgetContext.getComponentExecutionState<PlotlyLineChartExecutionState>();
+                const executionState = widgetContext.getComponentExecutionState<
+                    PlotlyLineChartExecutionState | TabulatorExecutionState
+                >();
 
-                if (!executionState || !executionState.getPlotlyData) {
+                if (!executionState || !executionState.getInstrumentItemData) {
                     context.throwError(`Invalid Plotly widget execution state`);
                     return;
                 }
 
-                message = executionState.getPlotlyData();
+                const instrumentItemData =
+                    executionState.getInstrumentItemData();
 
+                historyItemType = instrumentItemData.itemType;
+                message = instrumentItemData.message;
                 chartData = undefined;
-                historyItemType = "instrument/plotly";
             } else {
                 context.throwError("Invalid item type");
                 return;
@@ -1736,7 +1753,7 @@ export class AddToInstrumentHistoryActionComponent extends ActionComponent {
     chartHorizontalScale: string;
     chartVerticalScale: string;
 
-    plotlyWidget: string;
+    widget: string;
 
     override makeEditable() {
         super.makeEditable();
@@ -1763,7 +1780,7 @@ export class AddToInstrumentHistoryActionComponent extends ActionComponent {
             chartHorizontalScale: observable,
             chartVerticalScale: observable,
 
-            plotlyWidget: observable
+            widget: observable
         });
     }
 
@@ -1802,9 +1819,9 @@ export class AddToInstrumentHistoryActionComponent extends ActionComponent {
             dataBuffer.writeUint8(
                 AddToInstrumentHistoryActionComponent.ITEM_TYPE_EEZ_CHART
             );
-        } else if (this.itemType == "plotly") {
+        } else if (this.itemType == "widget") {
             dataBuffer.writeUint8(
-                AddToInstrumentHistoryActionComponent.ITEM_TYPE_PLOTLY
+                AddToInstrumentHistoryActionComponent.ITEM_TYPE_WIDGET
             );
         } else {
             dataBuffer.writeUint8(

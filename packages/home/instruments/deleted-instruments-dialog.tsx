@@ -12,7 +12,7 @@ import { confirm } from "eez-studio-ui/dialog-electron";
 import { ListContainer, List, IListNode, ListItem } from "eez-studio-ui/list";
 import { ButtonAction } from "eez-studio-ui/action";
 
-import { db } from "eez-studio-shared/db-path";
+import { db } from "eez-studio-shared/db";
 
 import { InstrumentsStore } from "home/instruments";
 
@@ -44,7 +44,7 @@ const DeletedInstrumentsDialog = observer(
                     .prepare(
                         `SELECT * FROM "activityLog" WHERE oid=? AND type='instrument/created'`
                     )
-                    .get(instrument.id);
+                    .get(instrument.id) as any;
                 creationDate = new Date(Number(result.date));
             } catch (err) {
                 // console.error(err);

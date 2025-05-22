@@ -179,11 +179,6 @@ export const ComponentEnclosure = observer(
                 return;
             }
 
-            if (this.updateComponentTimeout) {
-                clearTimeout(this.updateComponentTimeout);
-                this.updateComponentTimeout = undefined;
-            }
-
             if (this.elRef.current && this.listIndex == 0) {
                 const component = this.props.component;
                 if (component instanceof ProjectEditor.PageClass) {
@@ -198,7 +193,6 @@ export const ComponentEnclosure = observer(
 
                 if (this.elRef.current.offsetParent == null) {
                     // do not calculate geometry if element is not visible
-
                     this.updateComponentTimeout = setTimeout(() => {
                         this.updateComponentTimeout = undefined;
                         this.updateComponentGeometry();
@@ -221,12 +215,24 @@ export const ComponentEnclosure = observer(
             }
         };
 
+        debounceUpdateComponentGeometry = () => {
+            if (this.updateComponentTimeout) {
+                clearTimeout(this.updateComponentTimeout);
+                this.updateComponentTimeout = undefined;
+            }
+
+            this.updateComponentTimeout = setTimeout(() => {
+                this.updateComponentTimeout = undefined;
+                this.updateComponentGeometry();
+            });
+        };
+
         componentDidMount() {
-            setTimeout(this.updateComponentGeometry, 0);
+            this.debounceUpdateComponentGeometry();
         }
 
         componentDidUpdate() {
-            setTimeout(this.updateComponentGeometry, 0);
+            this.debounceUpdateComponentGeometry();
         }
 
         componentWillUnmount() {
@@ -238,6 +244,15 @@ export const ComponentEnclosure = observer(
 
         render() {
             const { component, flowContext, left, top, visible } = this.props;
+
+            // force calling calcComponentGeometry when clientRect changes
+
+            if (!flowContext.projectStore.projectTypeTraits.isFirmware) {
+                flowContext.viewState.transform.clientRect.left;
+                flowContext.viewState.transform.clientRect.top;
+                flowContext.viewState.transform.clientRect.width;
+                flowContext.viewState.transform.clientRect.height;
+            }
 
             if (component instanceof ProjectEditor.WidgetClass) {
                 if (flowContext.flowState) {
@@ -387,6 +402,10 @@ export const ComponentEnclosure = observer(
                             // component description
                             component instanceof
                                 ProjectEditor.ActionComponentClass &&
+                                !(
+                                    component instanceof
+                                    ProjectEditor.CommentActionComponentClass
+                                ) &&
                                 component.description &&
                                 flowContext.projectStore.uiStateStore
                                     .showComponentDescriptions &&

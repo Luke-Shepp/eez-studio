@@ -1,11 +1,21 @@
 import React from "react";
-import { observable, action, makeObservable } from "mobx";
+import {
+    observable,
+    action,
+    makeObservable,
+    runInAction,
+    computed
+} from "mobx";
 import { observer } from "mobx-react";
 
 import { dbQuery } from "eez-studio-shared/db-query";
 import { scheduleTask, Priority } from "eez-studio-shared/scheduler";
 
-import { PropertyList, BooleanProperty } from "eez-studio-ui/properties";
+import {
+    PropertyList,
+    BooleanProperty,
+    ButtonProperty
+} from "eez-studio-ui/properties";
 
 import type { IActivityLogEntry } from "instrument/window/history/activity-log";
 
@@ -13,7 +23,6 @@ import type { IAppStore, History } from "instrument/window/history/history";
 import type { IHistoryItem } from "instrument/window/history/item";
 
 export class Filters {
-    session: boolean = true;
     connectsAndDisconnects: boolean = true;
     scpi: boolean = true;
     downloadedFiles: boolean = true;
@@ -23,10 +32,11 @@ export class Filters {
     lists: boolean = true;
     notes: boolean = true;
     launchedScripts: boolean = true;
+    tabulators: boolean = true;
+    media: boolean = true;
 
     constructor() {
         makeObservable(this, {
-            session: observable,
             connectsAndDisconnects: observable,
             scpi: observable,
             downloadedFiles: observable,
@@ -35,17 +45,29 @@ export class Filters {
             charts: observable,
             lists: observable,
             notes: observable,
-            launchedScripts: observable
+            launchedScripts: observable,
+            tabulators: observable,
+            media: observable,
+
+            sqlFilter: computed
         });
     }
 
-    filterActivityLogEntry(activityLogEntry: IActivityLogEntry): boolean {
-        if (this.session) {
-            if (activityLogEntry.type.startsWith("activity-log/session")) {
-                return true;
-            }
-        }
+    setAll = action((value: boolean) => {
+        this.connectsAndDisconnects = value;
+        this.scpi = value;
+        this.downloadedFiles = value;
+        this.uploadedFiles = value;
+        this.attachedFiles = value;
+        this.charts = value;
+        this.lists = value;
+        this.notes = value;
+        this.launchedScripts = value;
+        this.tabulators = value;
+        this.media = value;
+    });
 
+    filterActivityLogEntry(activityLogEntry: IActivityLogEntry): boolean {
         if (this.connectsAndDisconnects) {
             if (
                 [
@@ -116,18 +138,61 @@ export class Filters {
             }
         }
 
+        if (this.tabulators) {
+            if (activityLogEntry.type === "instrument/tabulator") {
+                return true;
+            }
+        }
+
+        if (this.media) {
+            if (activityLogEntry.type === "activity-log/media") {
+                return true;
+            }
+        }
+
         return false;
     }
 
-    getFilter() {
+    get allSelected() {
+        return (
+            this.connectsAndDisconnects &&
+            this.scpi &&
+            this.downloadedFiles &&
+            this.uploadedFiles &&
+            this.attachedFiles &&
+            this.charts &&
+            this.lists &&
+            this.notes &&
+            this.launchedScripts &&
+            this.tabulators &&
+            this.media
+        );
+    }
+
+    get allDeselected() {
+        return !(
+            this.connectsAndDisconnects ||
+            this.scpi ||
+            this.downloadedFiles ||
+            this.uploadedFiles ||
+            this.attachedFiles ||
+            this.charts ||
+            this.lists ||
+            this.notes ||
+            this.launchedScripts ||
+            this.tabulators ||
+            this.media
+        );
+    }
+
+    get sqlFilter() {
         const types: string[] = [];
 
-        if (this.session) {
-            types.push(
-                "activity-log/session-start",
-                "activity-log/session-close"
-            );
+        if (this.allSelected) {
+            return "1";
         }
+
+        let additionalCondition = "";
 
         if (this.connectsAndDisconnects) {
             types.push(
@@ -173,9 +238,25 @@ export class Filters {
             types.push("instrument/script");
         }
 
+        if (this.tabulators) {
+            types.push("instrument/tabulator");
+        }
+
+        if (this.media) {
+            types.push("activity-log/media");
+
+            const typesThatSupportMediaNotes =
+                "type = 'instrument/plotly' or type = 'instrument/tabulator' or type = 'instrument/chart' or type = 'instrument/file-download' or type = 'instrument/file-upload' or type = 'instrument/received'";
+
+            additionalCondition = ` OR (${typesThatSupportMediaNotes}) and json_valid(message) and json_extract(message, '$.mediaNote') is not null`;
+        }
+
         if (types.length > 0) {
             return (
-                "(" + types.map(type => `type == '${type}'`).join(" OR ") + ")"
+                "(" +
+                types.map(type => `type == '${type}'`).join(" OR ") +
+                additionalCondition +
+                ")"
             );
         } else {
             return "0";
@@ -184,7 +265,6 @@ export class Filters {
 }
 
 export class FilterStats {
-    session = 0;
     connectsAndDisconnects = 0;
     scpi = 0;
     downloadedFiles = 0;
@@ -194,10 +274,11 @@ export class FilterStats {
     lists = 0;
     notes = 0;
     launchedScripts = 0;
+    tabulators = 0;
+    media = 0;
 
     constructor(public history: History) {
         makeObservable(this, {
-            session: observable,
             connectsAndDisconnects: observable,
             scpi: observable,
             downloadedFiles: observable,
@@ -207,7 +288,27 @@ export class FilterStats {
             lists: observable,
             notes: observable,
             launchedScripts: observable,
+            tabulators: observable,
+            media: observable,
             add: action
+        });
+
+        this.update();
+    }
+
+    update() {
+        runInAction(() => {
+            this.connectsAndDisconnects = 0;
+            this.scpi = 0;
+            this.downloadedFiles = 0;
+            this.uploadedFiles = 0;
+            this.attachedFiles = 0;
+            this.charts = 0;
+            this.lists = 0;
+            this.notes = 0;
+            this.launchedScripts = 0;
+            this.tabulators = 0;
+            this.media = 0;
         });
 
         scheduleTask("Get filter stats", Priority.Lowest, async () => {
@@ -216,7 +317,7 @@ export class FilterStats {
                 `SELECT
                             type, count(*) AS count
                         FROM
-                            ${history.table} AS T1
+                            ${this.history.table} AS T1
                         WHERE
                             ${this.history.oidWhereClause} AND NOT deleted
                         GROUP BY
@@ -231,13 +332,6 @@ export class FilterStats {
 
     add(type: string, amount: number) {
         if (
-            [
-                "activity-log/session-start",
-                "activity-log/session-close"
-            ].indexOf(type) !== -1
-        ) {
-            this.session += amount;
-        } else if (
             [
                 "instrument/created",
                 "instrument/restored",
@@ -269,6 +363,10 @@ export class FilterStats {
             this.notes += amount;
         } else if (type === "instrument/script") {
             this.launchedScripts += amount;
+        } else if (type === "instrument/tabulator") {
+            this.tabulators += amount;
+        } else if (type === "activity-log/media") {
+            this.media += amount;
         }
     }
 
@@ -289,15 +387,6 @@ export const FiltersComponent = observer(
             return (
                 <div className="EezStudio_FiltersComponentContainer">
                     <PropertyList>
-                        <BooleanProperty
-                            name={`Session start and close (${filterStats.session})`}
-                            value={this.props.appStore.filters.session}
-                            onChange={action(
-                                (value: boolean) =>
-                                    (this.props.appStore.filters.session =
-                                        value)
-                            )}
-                        />
                         <BooleanProperty
                             name={`Connects and disconnects (${filterStats.connectsAndDisconnects})`}
                             value={
@@ -383,6 +472,43 @@ export const FiltersComponent = observer(
                                         value)
                             )}
                         />
+
+                        <BooleanProperty
+                            name={`Tabulators (${filterStats.tabulators})`}
+                            value={this.props.appStore.filters.tabulators}
+                            onChange={action(
+                                (value: boolean) =>
+                                    (this.props.appStore.filters.tabulators =
+                                        value)
+                            )}
+                        />
+
+                        <BooleanProperty
+                            name={`Audio and video (${filterStats.media})`}
+                            value={this.props.appStore.filters.media}
+                            onChange={action(
+                                (value: boolean) =>
+                                    (this.props.appStore.filters.media = value)
+                            )}
+                        />
+
+                        <ButtonProperty
+                            name="Select All"
+                            className="btn-secondary"
+                            onChange={() =>
+                                this.props.appStore.filters.setAll(true)
+                            }
+                            disabled={this.props.appStore.filters.allSelected}
+                        ></ButtonProperty>
+
+                        <ButtonProperty
+                            name="Deselect All"
+                            className="btn-secondary"
+                            onChange={() =>
+                                this.props.appStore.filters.setAll(false)
+                            }
+                            disabled={this.props.appStore.filters.allDeselected}
+                        ></ButtonProperty>
                     </PropertyList>
                 </div>
             );

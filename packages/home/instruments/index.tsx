@@ -1,5 +1,5 @@
 import { ipcRenderer } from "electron";
-import { Menu, MenuItem } from "@electron/remote";
+import { Menu, MenuItem, dialog, getCurrentWindow } from "@electron/remote";
 import React from "react";
 import {
     computed,
@@ -31,6 +31,8 @@ import {
 import { ConnectionParameters } from "instrument/connection/interface";
 import { Loader } from "eez-studio-ui/loader";
 import { SearchInput } from "eez-studio-ui/search-input";
+import { showExportDialog } from "./export-dialog";
+import { showImportDialog } from "./import-dialog";
 
 ////////////////////////////////////////////////////////////////////////////////
 
@@ -304,12 +306,27 @@ const Toolbar = observer(
         instrumentsStore: InstrumentsStore;
     }> {
         render() {
-            let buttons = [
+            let buttons: {
+                id: string;
+                label: string;
+                icon?: any;
+                title: string;
+                className: string;
+                style?: React.CSSProperties;
+                onClick: () => void;
+                enabled?: boolean;
+            }[] = [
                 {
                     id: "instrument-add",
                     label: "Add Instrument",
                     title: "Add instrument",
                     className: "btn-success",
+                    style:
+                        deletedInstruments.size == 0
+                            ? {
+                                  marginRight: 20
+                              }
+                            : undefined,
                     onClick: () => {
                         const { showAddInstrumentDialog } =
                             require("instrument/add-instrument-dialog") as typeof import("instrument/add-instrument-dialog");
@@ -330,6 +347,7 @@ const Toolbar = observer(
                     label: "Deleted Instruments",
                     title: "Show deleted instruments",
                     className: "btn-secondary",
+                    style: { marginRight: 20 },
                     onClick: () => {
                         showDeletedInstrumentsDialog(
                             this.props.instrumentsStore
@@ -338,6 +356,57 @@ const Toolbar = observer(
                 });
             }
 
+            buttons.push({
+                id: "export-instrument",
+                label: "Export",
+                icon: (
+                    <svg viewBox="0 0 24 24" fill="currentcolor">
+                        <path d="M8.71 7.71 11 5.41V15a1 1 0 0 0 2 0V5.41l2.29 2.3a1 1 0 0 0 1.42 0 1 1 0 0 0 0-1.42l-4-4a1 1 0 0 0-.33-.21 1 1 0 0 0-.76 0 1 1 0 0 0-.33.21l-4 4a1 1 0 1 0 1.42 1.42M21 14a1 1 0 0 0-1 1v4a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1v-4a1 1 0 0 0-2 0v4a3 3 0 0 0 3 3h14a3 3 0 0 0 3-3v-4a1 1 0 0 0-1-1" />
+                    </svg>
+                ),
+                title: "Export to database",
+                className: "btn-secondary",
+                onClick: () => {
+                    showExportDialog(this.props.instrumentsStore);
+                }
+            });
+
+            buttons.push({
+                id: "import-instrument",
+                label: "Import",
+                icon: (
+                    <svg viewBox="0 0 24 24" fill="currentcolor">
+                        <path d="M21 14a1 1 0 0 0-1 1v4a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1v-4a1 1 0 0 0-2 0v4a3 3 0 0 0 3 3h14a3 3 0 0 0 3-3v-4a1 1 0 0 0-1-1m-9.71 1.71a1 1 0 0 0 .33.21.94.94 0 0 0 .76 0 1 1 0 0 0 .33-.21l4-4a1 1 0 0 0-1.42-1.42L13 12.59V3a1 1 0 0 0-2 0v9.59l-2.29-2.3a1 1 0 1 0-1.42 1.42Z" />
+                    </svg>
+                ),
+                title: "Import from database",
+                className: "btn-secondary",
+                onClick: async () => {
+                    let defaultPath = window.localStorage.getItem(
+                        "lastDatabaseOpenPath"
+                    );
+
+                    const result = await dialog.showOpenDialog(
+                        getCurrentWindow(),
+                        {
+                            properties: ["openFile"],
+                            filters: [
+                                { name: "DB files", extensions: ["db"] },
+                                { name: "All Files", extensions: ["*"] }
+                            ],
+                            defaultPath: defaultPath ?? undefined
+                        }
+                    );
+
+                    const filePaths = result.filePaths;
+
+                    if (filePaths && filePaths[0]) {
+                        const filePath = filePaths[0];
+                        showImportDialog(this.props.instrumentsStore, filePath);
+                    }
+                }
+            });
+
             return (
                 <ToolbarHeader>
                     {buttons.map((button, i) => (
@@ -345,11 +414,17 @@ const Toolbar = observer(
                             key={button.id}
                             text={button.label}
                             title={button.title}
+                            icon={button.icon}
                             className={button.className}
                             onClick={button.onClick}
-                            style={{
-                                marginRight: buttons.length - 1 == i ? 20 : 10
-                            }}
+                            style={Object.assign(
+                                {
+                                    marginRight:
+                                        buttons.length - 1 == i ? 20 : 10
+                                },
+                                button.style
+                            )}
+                            enabled={button.enabled}
                         />
                     ))}
                     {!this.props.instrumentsStore.selectInstrument &&

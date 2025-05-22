@@ -2,6 +2,7 @@ import React from "react";
 import { computed, makeObservable } from "mobx";
 import { observer } from "mobx-react";
 import classNames from "classnames";
+import { dialog, getCurrentWindow } from "@electron/remote";
 
 import { formatBytes } from "eez-studio-shared/formatBytes";
 import { guid } from "eez-studio-shared/guid";
@@ -55,20 +56,24 @@ export const PropertyEnclosure = observer(
 );
 
 export const StaticProperty = observer(
-    class StaticProperty extends React.Component<
-        {
-            name: string;
-            value: string;
-        },
-        {}
-    > {
+    class StaticProperty extends React.Component<{
+        name: string;
+        value: string;
+        className?: string;
+    }> {
         render() {
             const value =
                 (this.props.value && this.props.value.toString()) || "";
             return (
                 <PropertyEnclosure>
                     <td className="PropertyName">{this.props.name}</td>
-                    <td className="StaticPropertyValue" title={value}>
+                    <td
+                        className={classNames(
+                            "StaticPropertyValue",
+                            this.props.className
+                        )}
+                        title={value}
+                    >
                         {value}
                     </td>
                 </PropertyEnclosure>
@@ -660,11 +665,9 @@ export const KeybindingProperty = observer(
             makeObservable(this, {
                 keybinding: computed
             });
-
-            this.onKeyDown = this.onKeyDown.bind(this);
         }
 
-        onKeyDown(event: any) {
+        onKeyDown = (event: any) => {
             if (
                 event.nativeEvent.key === "Escape" ||
                 event.nativeEvent.key === "Enter" ||
@@ -710,7 +713,7 @@ export const KeybindingProperty = observer(
             }
 
             this.props.onChange(keybinding.join("+"));
-        }
+        };
 
         get keybinding() {
             return (
@@ -909,6 +912,8 @@ export const ButtonProperty = observer(
         {
             name?: string;
             onChange: (value: number) => void;
+            className?: string;
+            disabled?: boolean;
         },
         {}
     > {
@@ -917,7 +922,11 @@ export const ButtonProperty = observer(
                 <tr>
                     <td />
                     <td>
-                        <button onClick={value => this.props.onChange(1)}>
+                        <button
+                            className={classNames("btn", this.props.className)}
+                            onClick={value => this.props.onChange(1)}
+                            disabled={this.props.disabled}
+                        >
                             {this.props.name}
                         </button>
                     </td>
@@ -926,3 +935,43 @@ export const ButtonProperty = observer(
         }
     }
 );
+
+export class AbsoluteFileInputProperty extends React.Component<
+    {
+        name?: string;
+        value: string;
+        onChange: (value: string) => void;
+    },
+    {}
+> {
+    onSelect = async () => {
+        const result = await dialog.showOpenDialog(getCurrentWindow(), {
+            properties: ["openFile"],
+            filters: [{ name: "All Files", extensions: ["*"] }]
+        });
+
+        if (result.filePaths && result.filePaths[0]) {
+            this.props.onChange(result.filePaths[0]);
+        }
+    };
+
+    render() {
+        return (
+            <InputProperty
+                name={this.props.name}
+                value={this.props.value}
+                onChange={this.props.onChange}
+                type="text"
+                inputGroupButton={
+                    <button
+                        className="btn btn-secondary"
+                        type="button"
+                        onClick={this.onSelect}
+                    >
+                        &hellip;
+                    </button>
+                }
+            />
+        );
+    }
+}

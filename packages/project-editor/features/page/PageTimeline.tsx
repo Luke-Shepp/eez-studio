@@ -346,7 +346,7 @@ export const PageTimelineEditor = observer(
 
             this.updateHorizontalScoll();
 
-            this.context.navigationStore.setInitialSelectedPanel(this);
+            this.context.navigationStore.mountPanel(this);
         }
 
         componentWillUnmount() {
@@ -356,9 +356,7 @@ export const PageTimelineEditor = observer(
                 );
             }
 
-            if (this.context.navigationStore.selectedPanel === this) {
-                this.context.navigationStore.setSelectedPanel(undefined);
-            }
+            this.context.navigationStore.unmountPanel(this);
         }
 
         onVerticalScroll = action(() => {
@@ -389,9 +387,6 @@ export const PageTimelineEditor = observer(
         get selectedObjects() {
             return this.props.tabState.selectedObjects;
         }
-        cutSelection() {}
-        copySelection() {}
-        pasteSelection() {}
         deleteSelection() {
             if (this.props.tabState.timeline.selectedKeyframes.length > 0) {
                 this.context.deleteObjects(
@@ -617,7 +612,8 @@ const TimelineEditor = observer(
                 movementX: e.movementX ?? 0,
                 movementY: e.movementY ?? 0,
                 ctrlKey: e.ctrlKey,
-                shiftKey: e.shiftKey
+                shiftKey: e.shiftKey,
+                timeStamp: e.timeStamp
             };
 
             const dragSettings = hitTest(this.props.timelineState, e, x1, y1);
@@ -768,7 +764,8 @@ const TimelineEditor = observer(
                 movementX: e.movementX ?? 0,
                 movementY: e.movementY ?? 0,
                 ctrlKey: e.ctrlKey,
-                shiftKey: e.shiftKey
+                shiftKey: e.shiftKey,
+                timeStamp: e.timeStamp
             };
 
             const rectSvg = this.svgRef.current!.getBoundingClientRect();

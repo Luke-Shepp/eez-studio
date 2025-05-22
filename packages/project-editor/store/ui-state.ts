@@ -4,12 +4,12 @@ import { observable, extendObservable, action, toJS, runInAction } from "mobx";
 import { each } from "lodash";
 
 import * as notification from "eez-studio-ui/notification";
-import { IEezObject } from "project-editor/core/object";
+import { IEezObject, LVGLParts } from "project-editor/core/object";
 import type { Component } from "project-editor/flow/component";
 import { getObjectPathAsString } from "project-editor/store/helper";
 import type { ProjectStore } from "project-editor/store";
 import { Section } from "project-editor/store/output-sections";
-import type { LVGLParts } from "project-editor/lvgl/style-helper";
+import { isScrapbookItemFilePath } from "project-editor/store/scrapbook";
 
 ////////////////////////////////////////////////////////////////////////////////
 
@@ -45,6 +45,11 @@ export class UIStateStore {
     expressionBuilderInstrumentId: string | undefined;
 
     showFinishedFlowsInDebugger: boolean = true;
+
+    globalFlowZoom: boolean = true;
+    flowZoom: number = 1;
+
+    implementationLanguage = "C";
 
     get pageEditorFrontFace() {
         return this._pageEditorFrontFace;
@@ -96,7 +101,10 @@ export class UIStateStore {
             lvglState: observable,
             lvglExpandedPropertiesGroup: observable,
             expressionBuilderInstrumentId: observable,
-            showFinishedFlowsInDebugger: observable
+            showFinishedFlowsInDebugger: observable,
+            globalFlowZoom: observable,
+            flowZoom: observable,
+            implementationLanguage: observable
         });
     }
 
@@ -110,7 +118,10 @@ export class UIStateStore {
     }
 
     getUIStateFilePath() {
-        if (this.projectStore.filePath) {
+        if (
+            this.projectStore.filePath &&
+            !isScrapbookItemFilePath(this.projectStore.filePath)
+        ) {
             return this.projectStore.filePath + "-ui-state";
         }
         return undefined;
@@ -226,6 +237,18 @@ export class UIStateStore {
                 this.showFinishedFlowsInDebugger =
                     uiState.showInactiveFlowsInDebugger;
             }
+
+            if (uiState.globalFlowZoom != undefined) {
+                this.globalFlowZoom = uiState.globalFlowZoom;
+            }
+
+            if (uiState.flowZoom != undefined) {
+                this.flowZoom = uiState.flowZoom;
+            }
+
+            if (uiState.implementationLanguage != undefined) {
+                this.implementationLanguage = uiState.implementationLanguage;
+            }
         });
     }
 
@@ -287,7 +310,10 @@ export class UIStateStore {
             lvglState: this.lvglState,
             lvglExpandedPropertiesGroup: this.lvglExpandedPropertiesGroup,
             expressionBuilderInstrumentId: this.expressionBuilderInstrumentId,
-            showInactiveFlowsInDebugger: this.showFinishedFlowsInDebugger
+            showInactiveFlowsInDebugger: this.showFinishedFlowsInDebugger,
+            globalFlowZoom: this.globalFlowZoom,
+            flowZoom: this.flowZoom,
+            implementationLanguage: this.implementationLanguage
         };
 
         return state;

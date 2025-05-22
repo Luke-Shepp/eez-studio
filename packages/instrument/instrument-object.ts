@@ -9,6 +9,7 @@ import {
     IReactionDisposer
 } from "mobx";
 import { defer } from "lodash";
+import type { Database } from "better-sqlite3";
 
 import {
     createStore,
@@ -29,7 +30,7 @@ import {
 import { objectEqual } from "eez-studio-shared/util";
 import { isRenderer } from "eez-studio-shared/util-electron";
 import type { IUnit } from "eez-studio-shared/units";
-import { db } from "eez-studio-shared/db-path";
+import { db } from "eez-studio-shared/db";
 
 import type * as MainWindowModule from "main/window";
 
@@ -52,6 +53,7 @@ import type * as ConnectionRendererModule from "instrument/connection/connection
 import type { IResponseTypeType } from "instrument/scpi";
 
 import { isArray } from "eez-studio-shared/util";
+import { guid } from "eez-studio-shared/guid";
 
 ////////////////////////////////////////////////////////////////////////////////
 
@@ -64,6 +66,7 @@ const CONF_LISTS_CURRENT_DIGITS = 3;
 
 export interface IInstrumentObjectProps {
     id: string;
+    uuid: string;
     instrumentExtensionId: string;
     label?: string;
     idn?: string;
@@ -100,6 +103,7 @@ const UNKNOWN_INSTRUMENT_EXTENSION: IExtension = {
 
 export class InstrumentObject {
     id: string;
+    uuid: string;
 
     instrumentExtensionId: string;
     label: string | undefined;
@@ -182,7 +186,9 @@ export class InstrumentObject {
             (this.commandsProtocol == "SCPI" ? "newline" : "no-line-ending");
 
         if (!isRenderer()) {
-            this.initConnection();
+            setTimeout(() => {
+                this.initConnection();
+            });
         }
 
         this._autorunDispose = autorun(() => {
@@ -1117,10 +1123,31 @@ export const store = createStore({
 
         // version 9
         `ALTER TABLE instrument ADD COLUMN commandLineEnding TEXT DEFAULT 'no-line-ending';
-        UPDATE versions SET version = 9 WHERE tableName = 'instrument';`
+        UPDATE versions SET version = 9 WHERE tableName = 'instrument';`,
+
+        // version 10
+        (db: Database) => {
+            db.exec(`ALTER TABLE instrument ADD COLUMN uuid TEXT`);
+
+            const instruments = db
+                .prepare(`SELECT * FROM instrument`)
+                .all() as any;
+            for (const instrument of instruments) {
+                db.exec(
+                    `UPDATE instrument set uuid='${guid()}' WHERE id=${
+                        instrument.id
+                    }`
+                );
+            }
+
+            db.exec(
+                `UPDATE versions SET version = 10 WHERE tableName = 'instrument'`
+            );
+        }
     ],
     properties: {
         id: types.id,
+        uuid: types.string,
         deleted: types.boolean,
         instrumentExtensionId: types.string,
         label: types.string,
@@ -1149,6 +1176,7 @@ export const instruments = instrumentCollection.objects;
 
 export function createInstrument(extension: IExtension): string {
     return instrumentStore.createObject({
+        uuid: guid(),
         instrumentExtensionId: extension.id,
         autoConnect: false,
         recordHistory: true,

@@ -1,5 +1,5 @@
 import fs from "fs";
-import { app, screen, ipcMain, BrowserWindow } from "electron";
+import { app, screen, ipcMain, BrowserWindow, nativeTheme } from "electron";
 import {
     observable,
     action,
@@ -9,6 +9,7 @@ import {
     makeObservable,
     reaction
 } from "mobx";
+import DatabaseConstructor from "better-sqlite3";
 
 import { getUserDataPath } from "eez-studio-shared/util-electron";
 import { SETTINGS_FILE_NAME, DEFAULT_DB_NAME } from "eez-studio-shared/conf";
@@ -23,6 +24,12 @@ interface WindowState {
     isFullScreen?: boolean;
 }
 
+export interface IDbPath {
+    filePath: string;
+    isActive: boolean;
+    timeOfLastDatabaseCompactOperation: number;
+}
+
 export interface IMruItem {
     filePath: string;
     projectType: string;
@@ -30,15 +37,15 @@ export interface IMruItem {
 }
 
 class Settings {
-    firstTime: boolean = true;
-
     mru: IMruItem[] = [];
 
     windowStates: {
         [key: string]: WindowState;
     } = {};
 
-    dbPath: string = "";
+    activeDbPath: string = "";
+
+    dbPaths: IDbPath[] = [];
 
     locale: string = "";
     dateFormat: string = "";
@@ -51,6 +58,8 @@ class Settings {
     }
 
     _loaded: boolean = false;
+
+    showComponentsPaletteInProjectEditor: boolean = true;
 
     async loadSettings() {
         if (this._loaded) {
@@ -77,11 +86,13 @@ class Settings {
         makeObservable(this, {
             mru: observable,
             windowStates: observable,
-            dbPath: observable,
+            activeDbPath: observable,
+            dbPaths: observable,
             locale: observable,
             dateFormat: observable,
             timeFormat: observable,
-            isDarkTheme: observable
+            isDarkTheme: observable,
+            showComponentsPaletteInProjectEditor: observable
         });
 
         reaction(
@@ -105,13 +116,13 @@ class Settings {
                 window.webContents.send("mru-changed", mru)
             );
         });
+
+        autorun(() => {
+            nativeTheme.themeSource = this.isDarkTheme ? "dark" : "light";
+        });
     }
 
     async readSettings(settingsJs: Partial<Settings>) {
-        if (settingsJs.firstTime != undefined) {
-            this.firstTime = settingsJs.firstTime;
-        }
-
         if (settingsJs.mru != undefined) {
             const mru = settingsJs.mru.filter((mruItem: IMruItem) =>
                 fs.existsSync(mruItem.filePath)
@@ -137,8 +148,26 @@ class Settings {
             this.windowStates = settingsJs.windowStates;
         }
 
-        if (settingsJs.dbPath != undefined) {
-            this.dbPath = settingsJs.dbPath;
+        if (settingsJs.dbPaths != undefined) {
+            this.dbPaths = settingsJs.dbPaths;
+
+            this.dbPaths.forEach(dbPath => {
+                if (dbPath.timeOfLastDatabaseCompactOperation == undefined) {
+                    dbPath.timeOfLastDatabaseCompactOperation = Date.now();
+                }
+            });
+
+            this.activeDbPath =
+                this.dbPaths.find(dbPath => dbPath.isActive)?.filePath ?? "";
+        } else {
+            this.activeDbPath = (settingsJs as any).dbPath;
+            this.dbPaths = [
+                {
+                    filePath: this.activeDbPath,
+                    isActive: true,
+                    timeOfLastDatabaseCompactOperation: Date.now()
+                }
+            ];
         }
 
         if (settingsJs.locale != undefined) {
@@ -156,6 +185,11 @@ class Settings {
         if (settingsJs.isDarkTheme != undefined) {
             this.isDarkTheme = settingsJs.isDarkTheme;
         }
+
+        if (settingsJs.showComponentsPaletteInProjectEditor != undefined) {
+            this.showComponentsPaletteInProjectEditor =
+                settingsJs.showComponentsPaletteInProjectEditor;
+        }
     }
 }
 
@@ -168,24 +202,6 @@ export const settings = new Settings();
 export async function loadSettings() {
     settings.loadSettings();
 }
-
-////////////////////////////////////////////////////////////////////////////////
-
-export function getFirstTime() {
-    return settings.firstTime;
-}
-
-export function setFirstTime(value: boolean) {
-    runInAction(() => (settings.firstTime = value));
-}
-
-ipcMain.on("getFirstTime", function (event: any) {
-    event.returnValue = getFirstTime();
-});
-
-ipcMain.on("setFirstTime", function (event: any, value: boolean) {
-    setFirstTime(value);
-});
 
 ////////////////////////////////////////////////////////////////////////////////
 
@@ -351,8 +367,7 @@ export function settingsRegisterWindow(
 
 function isValidDbPath(dbPath: string) {
     try {
-        const Database = require("better-sqlite3");
-        const db = new Database(dbPath);
+        const db = new DatabaseConstructor(dbPath);
         db.close();
         return true;
     } catch (err) {
@@ -361,24 +376,32 @@ function isValidDbPath(dbPath: string) {
     }
 }
 
-export function getDbPath() {
-    if (settings.dbPath && isValidDbPath(settings.dbPath)) {
-        return settings.dbPath;
+export function getActiveDbPath() {
+    if (settings.activeDbPath && isValidDbPath(settings.activeDbPath)) {
+        return settings.activeDbPath;
     }
 
     return getUserDataPath(DEFAULT_DB_NAME);
 }
 
-export function setDbPath(dbPath: string) {
-    runInAction(() => (settings.dbPath = dbPath));
+export function getDbPaths() {
+    return toJS(settings.dbPaths);
 }
 
-ipcMain.on("getDbPath", function (event: any) {
-    event.returnValue = getDbPath();
+export function setDbPaths(dbPaths: IDbPath[]) {
+    runInAction(() => (settings.dbPaths = dbPaths));
+}
+
+ipcMain.on("getActiveDbPath", function (event: any) {
+    event.returnValue = getActiveDbPath();
 });
 
-ipcMain.on("setDbPath", function (event: any, dbPath: string) {
-    setDbPath(dbPath);
+ipcMain.on("getDbPaths", function (event: any) {
+    event.returnValue = getDbPaths();
+});
+
+ipcMain.on("setDbPaths", function (event: any, dbPaths: IDbPath[]) {
+    setDbPaths(dbPaths);
 });
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -450,5 +473,28 @@ ipcMain.on("getIsDarkTheme", function (event: any) {
 ipcMain.on("setIsDarkTheme", function (event: any, value: boolean) {
     setIsDarkTheme(value);
 });
+
+////////////////////////////////////////////////////////////////////////////////
+
+function getShowComponentsPaletteInProjectEditor() {
+    return settings.showComponentsPaletteInProjectEditor;
+}
+
+function setShowComponentsPaletteInProjectEditor(value: boolean) {
+    runInAction(() => {
+        settings.showComponentsPaletteInProjectEditor = value;
+    });
+}
+
+ipcMain.on("getShowComponentsPaletteInProjectEditor", function (event: any) {
+    event.returnValue = getShowComponentsPaletteInProjectEditor();
+});
+
+ipcMain.on(
+    "setShowComponentsPaletteInProjectEditor",
+    function (event: any, value: boolean) {
+        setShowComponentsPaletteInProjectEditor(value);
+    }
+);
 
 ////////////////////////////////////////////////////////////////////////////////

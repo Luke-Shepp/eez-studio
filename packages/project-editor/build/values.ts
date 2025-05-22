@@ -17,6 +17,7 @@ import {
     FLOW_VALUE_TYPE_BOOLEAN,
     FLOW_VALUE_TYPE_DATE,
     FLOW_VALUE_TYPE_DOUBLE,
+    FLOW_VALUE_TYPE_EVENT,
     FLOW_VALUE_TYPE_FLOAT,
     FLOW_VALUE_TYPE_INT32,
     FLOW_VALUE_TYPE_JSON,
@@ -28,6 +29,7 @@ import {
 } from "project-editor/build/value-types";
 import { Project } from "project-editor/project/project";
 import { isArray } from "eez-studio-shared/util";
+import type { UserProperty } from "project-editor/flow/user-property";
 
 export interface FlowValue {
     type: number;
@@ -56,6 +58,8 @@ export function getValueType(valueType: ValueType) {
         return FLOW_VALUE_TYPE_WIDGET;
     } else if (valueType == "json") {
         return FLOW_VALUE_TYPE_JSON;
+    } else if (valueType == "event") {
+        return FLOW_VALUE_TYPE_EVENT;
     } else if (isEnumType(valueType)) {
         return FLOW_VALUE_TYPE_INT32;
     } else if (isArrayType(valueType) || isStructType(valueType)) {
@@ -65,7 +69,10 @@ export function getValueType(valueType: ValueType) {
     }
 }
 
-function getVariableFlowValue(assets: Assets, variable: Variable): FlowValue {
+function getVariableFlowValue(
+    assets: Assets,
+    variable: Variable | UserProperty
+): FlowValue {
     let type;
 
     if (variable.type) {
@@ -81,10 +88,16 @@ function getVariableFlowValue(assets: Assets, variable: Variable): FlowValue {
     }
 
     try {
-        const { value } = evalConstantExpression(
+        let { value } = evalConstantExpression(
             assets.rootProject,
             variable.defaultValue
         );
+
+        if (variable.type == "json") {
+            if (value) {
+                value = assets.registerJSONValue(value);
+            }
+        }
 
         return {
             type,
@@ -154,7 +167,7 @@ export function getDefaultValueForType(project: Project, type: ValueType): any {
 export function buildVariableFlowValue(
     assets: Assets,
     dataBuffer: DataBuffer,
-    variable: Variable
+    variable: Variable | UserProperty
 ) {
     buildFlowValue(assets, dataBuffer, getVariableFlowValue(assets, variable));
 }
@@ -188,7 +201,14 @@ function buildFlowValue(
             dataBuffer.writeUint32(flowValue.value);
             dataBuffer.writeUint32(0);
         } else if (flowValue.type == FLOW_VALUE_TYPE_INT32) {
-            dataBuffer.writeInt32(flowValue.value);
+            if (
+                flowValue.value >= -2147483648 &&
+                flowValue.value <= 2147483647
+            ) {
+                dataBuffer.writeInt32(flowValue.value);
+            } else {
+                dataBuffer.writeUint32(flowValue.value);
+            }
             dataBuffer.writeUint32(0);
         } else if (flowValue.type == FLOW_VALUE_TYPE_FLOAT) {
             dataBuffer.writeFloat(flowValue.value);

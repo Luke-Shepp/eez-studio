@@ -1,5 +1,8 @@
-import { ipcRenderer, shell } from "electron";
+import fs from "fs";
+import { ipcRenderer, shell, clipboard } from "electron";
 import { dialog, getCurrentWindow } from "@electron/remote";
+import { confirm } from "eez-studio-ui/dialog-electron";
+import path from "path";
 import React from "react";
 import {
     observable,
@@ -7,14 +10,20 @@ import {
     action,
     runInAction,
     toJS,
-    makeObservable
+    makeObservable,
+    reaction
 } from "mobx";
 import { observer } from "mobx-react";
 import classNames from "classnames";
+import * as FlexLayout from "flexlayout-react";
 
 import { app, createEmptyFile } from "eez-studio-shared/util-electron";
 import { stringCompare } from "eez-studio-shared/string";
-import { getDbPath, setDbPath } from "eez-studio-shared/db-path";
+import {
+    initInstrumentDatabase,
+    InstrumentDatabase,
+    instrumentDatabases
+} from "eez-studio-shared/db";
 import {
     LOCALES,
     getLocale,
@@ -31,25 +40,29 @@ import { formatBytes } from "eez-studio-shared/formatBytes";
 import { showDialog, Dialog } from "eez-studio-ui/dialog";
 import { Loader } from "eez-studio-ui/loader";
 import {
+    AbsoluteFileInputProperty,
     BooleanProperty,
     PropertyList,
-    SelectProperty
+    SelectProperty,
+    StaticProperty
 } from "eez-studio-ui/properties";
-import { FileInputProperty } from "eez-studio-ui/properties-electron";
 import * as notification from "eez-studio-ui/notification";
-import { Header } from "eez-studio-ui/header-with-body";
+import {
+    Body,
+    Header,
+    ToolbarHeader,
+    VerticalHeaderWithBody
+} from "eez-studio-ui/header-with-body";
 
 import dbVacuum from "db-services/vacuum";
 import { getMoment } from "eez-studio-shared/util";
 import type { IMruItem } from "main/settings";
+import { IconAction } from "eez-studio-ui/action";
+import { HOME_TAB_OPEN_ICON } from "project-editor/ui-components/icons";
+import { FlexLayoutContainer } from "eez-studio-ui/FlexLayout";
+import { homeLayoutModels } from "./home-layout-models";
 
 ////////////////////////////////////////////////////////////////////////////////
-
-// after this period we should advise user to compact database
-const CONF_DATABASE_COMPACT_ADVISE_PERIOD = 30 * 24 * 60 * 60 * 1000; // 30 days
-
-const TIME_OF_LAST_DATABASE_COMPACT_OPERATION_ITEM_NAME =
-    "/home/settings/timeOfLastDatabaseCompactOperation";
 
 export const COMPACT_DATABASE_MESSAGE =
     "It is recommended to compact the database every 30 days.";
@@ -101,97 +114,90 @@ ipcRenderer.on("mru-changed", async (sender: any, mru: IMruItem[]) => {
 
 ////////////////////////////////////////////////////////////////////////////////
 
+const getShowComponentsPaletteInProjectEditor = function () {
+    return ipcRenderer.sendSync("getShowComponentsPaletteInProjectEditor");
+};
+
+const setShowComponentsPaletteInProjectEditor = function (value: boolean) {
+    ipcRenderer.send("setShowComponentsPaletteInProjectEditor", value);
+};
+
+////////////////////////////////////////////////////////////////////////////////
+
 class SettingsController {
-    activeDatabasePath = getDbPath();
     activetLocale = getLocale();
     activeDateFormat = getDateFormat();
     activeTimeFormat = getTimeFormat();
 
-    databasePath: string = getDbPath();
+    selectedDatabase: InstrumentDatabase | undefined;
+
     locale: string = getLocale();
     dateFormat: string = getDateFormat();
     timeFormat: string = getTimeFormat();
-    databaseSize: number;
-    timeOfLastDatabaseCompactOperation: Date;
-    _isCompactDatabaseAdvisable: boolean;
     isDarkTheme: boolean = getIsDarkTheme();
     mru: IMruItem[] = getMRU();
 
+    pythonUseCustomPath: boolean = false;
+    pythonCustomPath: string = "";
+
+    _showComponentsPaletteInProjectEditor: boolean =
+        getShowComponentsPaletteInProjectEditor();
+
     constructor() {
+        this.pythonUseCustomPath =
+            window.localStorage.getItem("pythonUseCustomPath") == "1"
+                ? true
+                : false;
+        this.pythonCustomPath =
+            window.localStorage.getItem("pythonCustomPath") ?? "";
+
+        this.selectedDatabase = instrumentDatabases.activeDatabase;
+
         makeObservable(this, {
-            databasePath: observable,
+            selectedDatabase: observable,
             locale: observable,
             dateFormat: observable,
             timeFormat: observable,
-            databaseSize: observable,
-            timeOfLastDatabaseCompactOperation: observable,
-            _isCompactDatabaseAdvisable: observable,
             isDarkTheme: observable,
             mru: observable,
-            updateTimeOfLastDatabaseCompact: action.bound,
-            isCompactDatabaseAdvisable: computed,
             restartRequired: computed,
-            onDatabasePathChange: action.bound,
             onLocaleChange: action.bound,
             onDateFormatChanged: action.bound,
             onTimeFormatChanged: action.bound,
             switchTheme: action.bound,
-            removeItemFromMRU: action
+            removeItemFromMRU: action,
+            pythonUseCustomPath: observable,
+            pythonCustomPath: observable
         });
 
-        var fs = require("fs");
-
-        this.databaseSize = fs.statSync(this.activeDatabasePath).size;
-
-        this.updateTimeOfLastDatabaseCompact();
-
-        setInterval(this.updateTimeOfLastDatabaseCompact, 60 * 1000);
-
         this.onThemeSwitched();
-    }
 
-    updateTimeOfLastDatabaseCompact() {
-        let timeOfLastDatabaseCompactOperationStr = localStorage.getItem(
-            TIME_OF_LAST_DATABASE_COMPACT_OPERATION_ITEM_NAME
-        );
-
-        if (timeOfLastDatabaseCompactOperationStr) {
-            this.timeOfLastDatabaseCompactOperation = new Date(
-                parseInt(timeOfLastDatabaseCompactOperationStr)
-            );
-        } else {
-            this.timeOfLastDatabaseCompactOperation = new Date();
-            localStorage.setItem(
-                TIME_OF_LAST_DATABASE_COMPACT_OPERATION_ITEM_NAME,
-                this.timeOfLastDatabaseCompactOperation.getTime().toString()
-            );
-        }
-
-        this._isCompactDatabaseAdvisable =
-            new Date().getTime() -
-                this.timeOfLastDatabaseCompactOperation.getTime() >
-            CONF_DATABASE_COMPACT_ADVISE_PERIOD;
-    }
-
-    get isCompactDatabaseAdvisable() {
-        return (
-            this.databasePath === this.activeDatabasePath &&
-            this._isCompactDatabaseAdvisable
+        reaction(
+            () => ({
+                setCustomPath: this.pythonUseCustomPath,
+                customPythonPath: this.pythonCustomPath
+            }),
+            ({ setCustomPath, customPythonPath }) => {
+                window.localStorage.setItem(
+                    "pythonUseCustomPath",
+                    setCustomPath ? "1" : "0"
+                );
+                window.localStorage.setItem(
+                    "pythonCustomPath",
+                    customPythonPath
+                );
+            }
         );
     }
 
     get restartRequired() {
         return (
-            this.databasePath !== this.activeDatabasePath ||
+            instrumentDatabases.activeDatabase?.filePath !==
+                instrumentDatabases.activeDatabasePath ||
             this.locale !== this.activetLocale ||
             this.dateFormat !== this.activeDateFormat ||
             this.timeFormat !== this.activeTimeFormat
         );
-    }
-
-    onDatabasePathChange(databasePath: string) {
-        this.databasePath = databasePath;
-        setDbPath(this.databasePath);
     }
 
     onLocaleChange(value: string) {
@@ -209,7 +215,13 @@ class SettingsController {
         setTimeFormat(value);
     }
 
+    onThemeSwitchedTimeout: any;
+
     switchTheme(value: boolean) {
+        if (this.onThemeSwitchedTimeout) {
+            return;
+        }
+
         this.isDarkTheme = value;
         setIsDarkTheme(value);
         this.onThemeSwitched();
@@ -246,9 +258,10 @@ class SettingsController {
                 "../../node_modules/flexlayout-react/style/light.css";
         }
 
-        setTimeout(() => {
+        this.onThemeSwitchedTimeout = setTimeout(() => {
+            this.onThemeSwitchedTimeout = undefined;
             content.style.opacity = "";
-        }, 200);
+        }, 500);
     }
 
     removeItemFromMRU(mruItem: IMruItem) {
@@ -259,21 +272,111 @@ class SettingsController {
         }
     }
 
+    addDatabase(filePath: string, isActive: boolean) {
+        instrumentDatabases.addDatabase(filePath, isActive);
+
+        runInAction(() => {
+            this.selectedDatabase = instrumentDatabases.databases.find(
+                database => database.filePath == filePath
+            );
+        });
+    }
+
     createNewDatabase = async () => {
-        const result = await dialog.showSaveDialog(getCurrentWindow(), {});
+        let defaultPath = window.localStorage.getItem("lastDatabaseSavePath");
+
+        const result = await dialog.showSaveDialog(getCurrentWindow(), {
+            filters: [
+                { name: "DB files", extensions: ["db"] },
+                { name: "All Files", extensions: ["*"] }
+            ],
+            defaultPath: defaultPath ?? undefined
+        });
+
         const filePath = result.filePath;
+
         if (filePath) {
             try {
                 createEmptyFile(filePath);
-                notification.success(`New database created`);
+
+                await initInstrumentDatabase(filePath);
+
+                const onFinish = action((isActive: boolean) => {
+                    this.addDatabase(filePath, isActive);
+
+                    window.localStorage.setItem(
+                        "lastDatabaseSavePath",
+                        path.dirname(filePath)
+                    );
+
+                    if (isActive) {
+                        this.askForRestart();
+                    }
+                });
+
+                confirm(
+                    "Do you want to make this database active?",
+                    undefined,
+                    () => onFinish(true),
+                    () => onFinish(false)
+                );
             } catch (error) {
                 notification.error(error.toString());
             }
         }
     };
 
-    showDatabasePathInFolder = () => {
-        shell.showItemInFolder(this.databasePath);
+    openDatabase = async () => {
+        let defaultPath = window.localStorage.getItem("lastDatabaseOpenPath");
+
+        const result = await dialog.showOpenDialog(getCurrentWindow(), {
+            properties: ["openFile"],
+            filters: [
+                { name: "DB files", extensions: ["db"] },
+                { name: "All Files", extensions: ["*"] }
+            ],
+            defaultPath: defaultPath ?? undefined
+        });
+
+        const filePaths = result.filePaths;
+
+        if (filePaths && filePaths[0]) {
+            const filePath = filePaths[0];
+
+            const onFinish = action((isActive: boolean) => {
+                this.addDatabase(filePath, isActive);
+
+                window.localStorage.setItem(
+                    "lastDatabaseOpenPath",
+                    path.dirname(filePath)
+                );
+
+                if (isActive) {
+                    this.askForRestart();
+                }
+            });
+
+            confirm(
+                "Do you want to make this database active?",
+                undefined,
+                () => onFinish(true),
+                () => onFinish(false)
+            );
+        }
+    };
+
+    askForRestart = () => {
+        if (
+            instrumentDatabases.activeDatabase &&
+            instrumentDatabases.activeDatabase.filePath !=
+                instrumentDatabases.activeDatabasePath
+        ) {
+            confirm(
+                "Do you want to restart the application?",
+                "Restart is required to finish activation of new database.",
+                this.restart
+            );
+        }
     };
 
     restart = () => {
@@ -281,8 +384,40 @@ class SettingsController {
         app.exit();
     };
 
-    compactDatabase() {
-        showDialog(<CompactDatabaseDialog />);
+    setAsActiveDatabase = action(() => {
+        if (this.selectedDatabase) {
+            instrumentDatabases.setAsActiveDatabase(this.selectedDatabase);
+
+            this.askForRestart();
+        }
+    });
+
+    deleteDatabase = () => {
+        if (this.selectedDatabase) {
+            instrumentDatabases.removeDatabase(this.selectedDatabase);
+        }
+    };
+
+    showDatabasePathInFolder = () => {
+        if (this.selectedDatabase) {
+            shell.showItemInFolder(this.selectedDatabase.filePath);
+        }
+    };
+
+    compactDatabase = () => {
+        if (!this.selectedDatabase) {
+            return;
+        }
+        showDialog(<CompactDatabaseDialog database={this.selectedDatabase} />);
+    };
+
+    get showComponentsPaletteInProjectEditor() {
+        return this._showComponentsPaletteInProjectEditor;
+    }
+
+    set showComponentsPaletteInProjectEditor(value: boolean) {
+        this._showComponentsPaletteInProjectEditor = value;
+        setShowComponentsPaletteInProjectEditor(value);
     }
 }
 
@@ -291,7 +426,9 @@ export const settingsController = new SettingsController();
 ////////////////////////////////////////////////////////////////////////////////
 
 const CompactDatabaseDialog = observer(
-    class CompactDatabaseDialog extends React.Component {
+    class CompactDatabaseDialog extends React.Component<{
+        database: InstrumentDatabase;
+    }> {
         sizeBefore: number;
         sizeAfter: number | undefined;
         sizeReduced: number | undefined;
@@ -305,29 +442,26 @@ const CompactDatabaseDialog = observer(
                 sizeReduced: observable
             });
 
-            var fs = require("fs");
-            this.sizeBefore = fs.statSync(
-                settingsController.activeDatabasePath
-            ).size;
+            this.sizeBefore = fs.statSync(this.props.database.filePath).size;
         }
 
         async componentDidMount() {
             try {
                 await dbVacuum();
 
-                localStorage.setItem(
-                    TIME_OF_LAST_DATABASE_COMPACT_OPERATION_ITEM_NAME,
-                    new Date().getTime().toString()
-                );
-                settingsController.updateTimeOfLastDatabaseCompact();
+                runInAction(() => {
+                    this.props.database.timeOfLastDatabaseCompactOperation =
+                        Date.now();
+                });
 
                 runInAction(() => {
                     var fs = require("fs");
+
                     this.sizeAfter = fs.statSync(
-                        settingsController.activeDatabasePath
+                        this.props.database.filePath
                     ).size;
 
-                    settingsController.databaseSize = this.sizeAfter!;
+                    this.props.database.databaseSize = this.sizeAfter!;
 
                     this.sizeReduced =
                         (100 * (this.sizeBefore - this.sizeAfter!)) /
@@ -393,91 +527,346 @@ const CompactDatabaseDialog = observer(
 
 ////////////////////////////////////////////////////////////////////////////////
 
+const DatabaseListItem = observer(
+    class DbPathListItem extends React.Component<{
+        database: InstrumentDatabase;
+        isSelected: boolean;
+        onSelect: () => void;
+    }> {
+        render() {
+            const { database, isSelected, onSelect } = this.props;
+
+            const className = classNames({
+                selected: isSelected
+            });
+
+            return (
+                <tr className={className} onClick={onSelect}>
+                    <td
+                        style={{
+                            fontWeight: database.isActive ? "bold" : "normal"
+                        }}
+                    >
+                        {database.isActive ? "[ACTIVE] " : ""}
+                        {path.parse(database.filePath).name}
+                    </td>
+                </tr>
+            );
+        }
+    }
+);
+
+////////////////////////////////////////////////////////////////////////////////
+
+const SelectedDatabaseDetails = observer(
+    class SelectedDatabaseDetails extends React.Component {
+        render() {
+            const selectedDatabase = settingsController.selectedDatabase;
+            if (!selectedDatabase) {
+                return null;
+            }
+
+            return (
+                <div className="EezStudio_Settings_Database_Details">
+                    {!selectedDatabase.isActive && (
+                        <div>
+                            <button
+                                className="btn btn-primary btn-sm"
+                                onClick={settingsController.setAsActiveDatabase}
+                            >
+                                Set as Active
+                            </button>
+                        </div>
+                    )}
+
+                    <div>
+                        <label
+                            htmlFor="EezStudio_ProjectEditorScrapbook_ItemDetails_Description"
+                            className="form-label"
+                        >
+                            Description:
+                        </label>
+                        <textarea
+                            className="form-control"
+                            id="EezStudio_ProjectEditorScrapbook_ItemDetails_Description"
+                            rows={3}
+                            value={selectedDatabase.description}
+                            onChange={action(event => {
+                                selectedDatabase.description =
+                                    event.target.value;
+                            })}
+                            onBlur={() => selectedDatabase.storeDescription()}
+                        ></textarea>
+                    </div>
+
+                    <div>
+                        <label className="form-label">Path:</label>
+                        <div>{selectedDatabase.filePath}</div>
+
+                        <button
+                            type="button"
+                            className="btn btn-secondary btn-sm"
+                            onClick={
+                                settingsController.showDatabasePathInFolder
+                            }
+                            style={{ marginTop: "5px" }}
+                        >
+                            Show in Folder
+                        </button>
+
+                        <button
+                            type="button"
+                            className="btn btn-secondary btn-sm"
+                            onClick={() =>
+                                clipboard.writeText(selectedDatabase.filePath)
+                            }
+                            style={{ marginTop: "5px", marginLeft: "5px" }}
+                        >
+                            Copy Path to Clipboard
+                        </button>
+                    </div>
+
+                    <div
+                        className={classNames("EezStudio_DatabaseCompactDiv", {
+                            databaseCompactIsAdvisable:
+                                selectedDatabase.isCompactDatabaseAdvisable
+                        })}
+                    >
+                        <div>
+                            Database size is{" "}
+                            {formatBytes(selectedDatabase.databaseSize)}.
+                        </div>
+                        <div>
+                            Database compacted{" "}
+                            {getMoment()(
+                                selectedDatabase.timeOfLastDatabaseCompactOperation
+                            ).fromNow()}
+                            .
+                        </div>
+                        {selectedDatabase.isCompactDatabaseAdvisable && (
+                            <div>{COMPACT_DATABASE_MESSAGE}</div>
+                        )}
+                        <div className="btn-group me-2">
+                            <button
+                                type="button"
+                                className="btn btn-secondary btn-sm"
+                                onClick={settingsController.compactDatabase}
+                            >
+                                Compact Database
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+    }
+);
+
+////////////////////////////////////////////////////////////////////////////////
+
+const DatatabaseList = observer(
+    class DatatabaseList extends React.Component {
+        ref = React.createRef<HTMLDivElement>();
+
+        componentDidMount() {
+            this.ensureSelectedVisible();
+        }
+
+        componentDidUpdate() {
+            this.ensureSelectedVisible();
+        }
+
+        ensureSelectedVisible() {
+            const selected = this.ref.current?.querySelector(".selected");
+            if (selected) {
+                selected.scrollIntoView({ block: "nearest" });
+            }
+        }
+
+        render() {
+            return (
+                <VerticalHeaderWithBody className="EezStudio_Settings_Databases_List">
+                    <ToolbarHeader>
+                        <IconAction
+                            icon="material:add"
+                            title="Create a new database"
+                            onClick={settingsController.createNewDatabase}
+                        />
+                        <IconAction
+                            icon={HOME_TAB_OPEN_ICON}
+                            title="Open an existing database"
+                            onClick={settingsController.openDatabase}
+                        />
+                        <IconAction
+                            icon="material:delete"
+                            title="Delete a database"
+                            onClick={settingsController.deleteDatabase}
+                            enabled={
+                                settingsController.selectedDatabase &&
+                                !settingsController.selectedDatabase.isActive
+                            }
+                        />
+                    </ToolbarHeader>
+                    <Body>
+                        <div
+                            className="EezStudio_Settings_Databases_List_Body"
+                            ref={this.ref}
+                        >
+                            <table>
+                                <tbody>
+                                    {instrumentDatabases.databases.map(
+                                        database => (
+                                            <DatabaseListItem
+                                                key={database.filePath}
+                                                database={database}
+                                                isSelected={
+                                                    database.filePath ==
+                                                    settingsController
+                                                        .selectedDatabase
+                                                        ?.filePath
+                                                }
+                                                onSelect={action(
+                                                    action(() => {
+                                                        settingsController.selectedDatabase =
+                                                            database;
+                                                    })
+                                                )}
+                                            />
+                                        )
+                                    )}
+                                </tbody>
+                            </table>
+                        </div>
+                    </Body>
+                </VerticalHeaderWithBody>
+            );
+        }
+    }
+);
+
+////////////////////////////////////////////////////////////////////////////////
+
+const Databases = observer(
+    class Databases extends React.Component {
+        factory(node: FlexLayout.TabNode) {
+            var component = node.getComponent();
+
+            if (component === "list") {
+                return <DatatabaseList />;
+            }
+
+            if (component === "details") {
+                return <SelectedDatabaseDetails />;
+            }
+
+            return null;
+        }
+
+        render() {
+            return (
+                <tr>
+                    <td>Databases</td>
+
+                    <td>
+                        <div className="EezStudio_Settings_Databases">
+                            <FlexLayoutContainer
+                                model={homeLayoutModels.databaseSettings}
+                                factory={this.factory}
+                            />
+                        </div>
+                    </td>
+                </tr>
+            );
+        }
+    }
+);
+
+////////////////////////////////////////////////////////////////////////////////
+
+const PythonSettings = observer(
+    class PythonSettings extends React.Component {
+        constructor(props: any) {
+            super(props);
+
+            const { PythonShell } =
+                require("python-shell") as typeof import("python-shell");
+
+            PythonShell.runString(
+                "import sys;print(sys.executable)",
+                undefined,
+                action((err, output) => {
+                    if (err) {
+                        console.log(err);
+                        this.pythonPathError = true;
+                    } else if (!output) {
+                        this.pythonPathError = true;
+                    } else {
+                        this.pythonPath = output[0];
+                    }
+                })
+            );
+
+            makeObservable(this, {
+                pythonPath: observable,
+                pythonPathError: observable
+            });
+        }
+
+        pythonPath: string = "";
+        pythonPathError: boolean = false;
+
+        render() {
+            return (
+                <tr>
+                    <td>Python</td>
+                    <td>
+                        <PropertyList>
+                            <StaticProperty
+                                name="Default path"
+                                value={
+                                    this.pythonPathError
+                                        ? "Python not found"
+                                        : this.pythonPath
+                                }
+                                className="StaticPropertyValueWrap"
+                            />
+                            <BooleanProperty
+                                name={`Set custom path`}
+                                value={settingsController.pythonUseCustomPath}
+                                onChange={action(
+                                    value =>
+                                        (settingsController.pythonUseCustomPath =
+                                            value)
+                                )}
+                                checkboxStyleSwitch={true}
+                            />
+                            {settingsController.pythonUseCustomPath && (
+                                <AbsoluteFileInputProperty
+                                    name="Custom Python path"
+                                    value={settingsController.pythonCustomPath}
+                                    onChange={action(value => {
+                                        settingsController.pythonCustomPath =
+                                            value;
+                                    })}
+                                />
+                            )}
+                        </PropertyList>
+                    </td>
+                </tr>
+            );
+        }
+    }
+);
+
+////////////////////////////////////////////////////////////////////////////////
+
 export const Settings = observer(
     class Settings extends React.Component {
         render() {
-            const databaseCompactDivClassName = classNames(
-                "EezStudio_DatabaseCompactDiv",
-                {
-                    databaseCompactIsAdvisable:
-                        settingsController.isCompactDatabaseAdvisable
-                }
-            );
-
             return (
                 <div className="EezStudio_HomeSettingsBody">
                     <PropertyList>
-                        <FileInputProperty
-                            name="Database location"
-                            value={settingsController.databasePath}
-                            onChange={settingsController.onDatabasePathChange}
-                        />
-                        <tr>
-                            <td />
-                            <td>
-                                <div className="btn-toolbar">
-                                    <div className="btn-group me-2">
-                                        <button
-                                            type="button"
-                                            className="btn btn-secondary btn-sm"
-                                            onClick={
-                                                settingsController.createNewDatabase
-                                            }
-                                        >
-                                            Create New Database
-                                        </button>
-                                    </div>
-                                    <div className="btn-group me-2">
-                                        <button
-                                            type="button"
-                                            className="btn btn-secondary btn-sm"
-                                            onClick={
-                                                settingsController.showDatabasePathInFolder
-                                            }
-                                        >
-                                            Show in Folder
-                                        </button>
-                                    </div>
-                                </div>
-                                {settingsController.databasePath ===
-                                    settingsController.activeDatabasePath && (
-                                    <div
-                                        className={databaseCompactDivClassName}
-                                    >
-                                        <div>
-                                            Database size is{" "}
-                                            {formatBytes(
-                                                settingsController.databaseSize
-                                            )}
-                                            .
-                                        </div>
-                                        <div>
-                                            Database compacted{" "}
-                                            {getMoment()(
-                                                settingsController.timeOfLastDatabaseCompactOperation
-                                            ).fromNow()}
-                                            .
-                                        </div>
-                                        {settingsController.isCompactDatabaseAdvisable && (
-                                            <div>
-                                                {COMPACT_DATABASE_MESSAGE}
-                                            </div>
-                                        )}
-                                        <div className="btn-group me-2">
-                                            <button
-                                                type="button"
-                                                className="btn btn-secondary btn-sm"
-                                                onClick={
-                                                    settingsController.compactDatabase
-                                                }
-                                            >
-                                                Compact Database
-                                            </button>
-                                        </div>
-                                    </div>
-                                )}
-                            </td>
-                        </tr>
+                        <Databases />
                         <SelectProperty
                             name="Locale"
                             value={settingsController.locale}
@@ -529,10 +918,12 @@ export const Settings = observer(
                                 </option>
                             ))}
                         </SelectProperty>
+                        <PythonSettings />
                         <BooleanProperty
                             name={`Dark theme`}
                             value={settingsController.isDarkTheme}
                             onChange={settingsController.switchTheme}
+                            checkboxStyleSwitch={true}
                         />
                     </PropertyList>
                     {settingsController.restartRequired && (
@@ -552,3 +943,5 @@ export const Settings = observer(
         }
     }
 );
+
+////////////////////////////////////////////////////////////////////////////////

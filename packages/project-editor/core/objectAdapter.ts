@@ -12,7 +12,7 @@ import { createTransformer } from "mobx-utils";
 import { map, find, each, pickBy } from "lodash";
 
 import { stringCompare } from "eez-studio-shared/string";
-import { Rect } from "eez-studio-shared/geometry";
+import { Point, Rect } from "eez-studio-shared/geometry";
 
 import {
     getProperty,
@@ -24,14 +24,14 @@ import {
     getParent,
     getId,
     EezObject,
-    setKey
+    setKey,
+    getKey
 } from "project-editor/core/object";
 
 import {
     canDuplicate,
     canCut,
     canCopy,
-    canPaste,
     canDelete,
     extendContextMenu,
     cutItem,
@@ -39,7 +39,7 @@ import {
     deleteItems,
     canContainChildren,
     getProjectStore,
-    copyToClipboard,
+    copyProjectEditorDataToClipboard,
     setClipboardData,
     objectToClipboardData,
     findPastePlaceInside,
@@ -54,7 +54,10 @@ import {
     canAdd,
     addItem,
     isObjectReferencable,
-    canContain
+    canContain,
+    getProjectEditorDataFromClipboard,
+    getAncestorOfType,
+    getAddItemName
 } from "project-editor/store";
 
 import { DragAndDropManager } from "project-editor/core/dd";
@@ -466,7 +469,7 @@ export class TreeObjectAdapter {
                 ).objectsToClipboardData(objects);
 
                 deleteItems(objects, () => {
-                    copyToClipboard(cliboardText);
+                    copyProjectEditorDataToClipboard(cliboardText);
                 });
             }
         }
@@ -491,41 +494,18 @@ export class TreeObjectAdapter {
             let objects = this.selectedItems.map(
                 item => item.object as EezObject
             );
-            copyToClipboard(
+            copyProjectEditorDataToClipboard(
                 getProjectStore(this.object).objectsToClipboardData(objects)
             );
         }
     }
 
     canPaste() {
-        const projectStore = getProjectStore(this.object);
-
-        if (this.selectedItems.length == 0) {
-            if (canPaste(projectStore, this.object)) {
-                return true;
-            }
-            return false;
-        }
-
-        if (this.selectedItems.length == 1) {
-            if (canPaste(projectStore, this.selectedItems[0].object)) {
-                return true;
-            }
-            return false;
-        }
-
-        const allObjectsAreFromTheSameParent = !this.selectedItems.find(
-            selectedItem =>
-                getParent(selectedItem.object) !==
-                getParent(this.selectedItems[0].object)
+        return (
+            getProjectEditorDataFromClipboard(
+                ProjectEditor.getProjectStore(this.object)
+            ) != undefined
         );
-        if (allObjectsAreFromTheSameParent) {
-            if (canPaste(projectStore, this.selectedItems[0].object)) {
-                return true;
-            }
-        }
-
-        return false;
     }
 
     pasteSelection() {
@@ -575,10 +555,13 @@ export class TreeObjectAdapter {
 
     createSelectionContextMenu(
         actions?: {
-            pasteSelection: () => void;
-            duplicateSelection: () => void;
+            add?: boolean;
+            pasteSelection?: () => void;
+            duplicateSelection?: () => void;
+            atPoint?: Point;
         },
-        editable?: boolean
+        editable?: boolean,
+        additionalMenuItems?: Electron.MenuItem[]
     ) {
         let menuItems: Electron.MenuItem[] = [];
 
@@ -612,10 +595,16 @@ export class TreeObjectAdapter {
             parentObject = this.object;
         }
 
-        if (editable && parentObject && canAdd(parentObject)) {
+        if (
+            editable &&
+            parentObject &&
+            !(parentObject instanceof ProjectEditor.FlowClass) &&
+            canAdd(parentObject) &&
+            !(actions?.add === false)
+        ) {
             menuItems.push(
                 new MenuItem({
-                    label: "Add",
+                    label: `Add ${getAddItemName(parentObject)}...`,
                     click: async () => {
                         const aNewObject = await addItem(parentObject!);
                         if (aNewObject) {
@@ -714,7 +703,8 @@ export class TreeObjectAdapter {
                         if (actions?.pasteSelection) {
                             actions.pasteSelection();
                         } else {
-                            this.pasteSelection();
+                            const projectStore = getProjectStore(this.object);
+                            projectStore.paste();
                         }
                     }
                 })
@@ -761,7 +751,41 @@ export class TreeObjectAdapter {
             );
         }
 
+        if (additionalMenuItems) {
+            if (menuItems.length > 0) {
+                menuItems.push(
+                    new MenuItem({
+                        type: "separator"
+                    })
+                );
+            }
+            menuItems = menuItems.concat(additionalMenuItems);
+        }
+
+        if (
+            editable &&
+            getAncestorOfType(
+                selectedObject || parentObject,
+                ProjectEditor.FlowClass.classInfo
+            ) &&
+            getKey(parentObject) != "localVariables" &&
+            getKey(parentObject) != "actions" &&
+            getKey(parentObject) != "userPages" &&
+            getKey(parentObject) != "userWidgets"
+        ) {
+            ProjectEditor.newComponentMenuItem(
+                selectedObject || parentObject,
+                menuItems,
+                actions?.atPoint
+            );
+        }
+
         if (menuItems.length > 0) {
+            // remove separator at the end
+            if (menuItems[menuItems.length - 1].type == "separator") {
+                menuItems.splice(menuItems.length - 1, 1);
+            }
+
             const menu = new Menu();
             menuItems.forEach(menuItem => menu.append(menuItem));
             return menu;
@@ -808,7 +832,8 @@ export class TreeAdapter {
         onClick?: (object: IEezObject) => void,
         onDoubleClick?: (object: IEezObject) => void,
         protected searchText?: string,
-        protected editable?: boolean
+        protected editable?: boolean,
+        protected hideRootItem?: boolean
     ) {
         this.onClickCallback = onClick;
         this.onDoubleClickCallback = onDoubleClick;
@@ -844,7 +869,10 @@ export class TreeAdapter {
 
         const children: ITreeRow[] = [];
 
-        function getChildren(item: TreeObjectAdapter) {
+        const getChildren = (
+            item: TreeObjectAdapter,
+            hideRootItem: boolean
+        ): TreeObjectAdapter[] => {
             let itemChildren = map(
                 item.children,
                 childItem => childItem
@@ -866,8 +894,12 @@ export class TreeAdapter {
                 );
             }
 
+            if (itemChildren.length == 1 && hideRootItem) {
+                return getChildren(itemChildren[0], false);
+            }
+
             return itemChildren;
-        }
+        };
 
         function enumChildren(childItems: TreeObjectAdapter[], level: number) {
             childItems.forEach(childItem => {
@@ -876,7 +908,7 @@ export class TreeAdapter {
                     isArray(childItem.object) &&
                     isShowOnlyChildrenInTree(childItem.object);
 
-                let childItems = getChildren(childItem);
+                let childItems = getChildren(childItem, false);
 
                 if (showOnlyChildren) {
                     enumChildren(childItems, level);
@@ -920,7 +952,7 @@ export class TreeAdapter {
             });
         }
 
-        enumChildren(getChildren(this.rootItem), 0);
+        enumChildren(getChildren(this.rootItem, this.hideRootItem ?? false), 0);
 
         return children;
     }
@@ -1027,16 +1059,32 @@ export class TreeAdapter {
         this.rootItem.showSelectionContextMenu(this.editable ?? true);
     }
 
+    canCut() {
+        return this.rootItem.canCut();
+    }
+
     cutSelection() {
         this.rootItem.cutSelection();
+    }
+
+    canCopy() {
+        return this.rootItem.canCopy();
     }
 
     copySelection() {
         this.rootItem.copySelection();
     }
 
+    canPaste() {
+        return this.rootItem.canPaste();
+    }
+
     pasteSelection() {
         this.rootItem.pasteSelection();
+    }
+
+    canDelete() {
+        return this.rootItem.canDelete();
     }
 
     deleteSelection() {

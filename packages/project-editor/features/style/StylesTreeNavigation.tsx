@@ -6,7 +6,8 @@ import {
     reaction,
     IReactionDisposer,
     IObservableValue,
-    makeObservable
+    makeObservable,
+    runInAction
 } from "mobx";
 import { observer } from "mobx-react";
 
@@ -29,7 +30,7 @@ import { DragAndDropManagerClass } from "project-editor/core/dd";
 
 import { ProjectContext } from "project-editor/project/context";
 import { ProjectEditor } from "project-editor/project-editor-interface";
-import { DropFile, Tree } from "project-editor/ui-components/Tree";
+import { Tree } from "project-editor/ui-components/Tree";
 import { SortControl } from "project-editor/ui-components/ListNavigation";
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -38,6 +39,7 @@ const AddButton = observer(
     class AddButton extends React.Component<{
         treeAdapter: TreeAdapter;
         navigationObject: IEezObject | undefined;
+        onAdd: () => void;
     }> {
         static contextType = ProjectContext;
         declare context: React.ContextType<typeof ProjectContext>;
@@ -59,6 +61,8 @@ const AddButton = observer(
                             result.object,
                             result.subObject
                         );
+                    } else {
+                        this.props.onAdd();
                     }
                 }
             }
@@ -67,7 +71,7 @@ const AddButton = observer(
         render() {
             return (
                 <IconAction
-                    title="Add Item"
+                    title="Add Style..."
                     icon="material:add"
                     iconSize={16}
                     onClick={this.onAdd}
@@ -120,7 +124,7 @@ interface StylesTreeNavigationProps {
     dragAndDropManager?: DragAndDropManagerClass;
     searchInput?: boolean;
     editable?: boolean;
-    onFilesDrop?: (files: DropFile[]) => void;
+    onFilesDrop?: (files: File[]) => void;
 }
 
 export const StylesTreeNavigation = observer(
@@ -136,6 +140,8 @@ export const StylesTreeNavigation = observer(
 
         dispose1: IReactionDisposer;
         dispose2: IReactionDisposer;
+
+        divRef = React.createRef<HTMLDivElement>();
 
         constructor(props: StylesTreeNavigationProps) {
             super(props);
@@ -198,7 +204,7 @@ export const StylesTreeNavigation = observer(
                 }
             );
 
-            this.context.navigationStore.setInitialSelectedPanel(this);
+            this.context.navigationStore.mountPanel(this);
         }
 
         componentDidUpdate() {
@@ -208,9 +214,7 @@ export const StylesTreeNavigation = observer(
         componentWillUnmount() {
             this.dispose1();
             this.dispose2();
-            if (this.context.navigationStore.selectedPanel === this) {
-                this.context.navigationStore.setSelectedPanel(undefined);
-            }
+            this.context.navigationStore.unmountPanel(this);
         }
 
         get treeObjectAdapter() {
@@ -266,6 +270,10 @@ export const StylesTreeNavigation = observer(
                 );
                 return;
             }
+
+            runInAction(() => {
+                this.context.navigationStore.selectedStyleObject.set(object);
+            });
         };
 
         onDoubleClickItem = (object: IEezObject) => {
@@ -281,30 +289,42 @@ export const StylesTreeNavigation = observer(
         get selectedObjects() {
             return this.treeAdapter.rootItem.selectedObjects;
         }
+        canCut() {
+            return this.treeAdapter.canCut();
+        }
         cutSelection() {
             if (this.editable) {
                 this.treeAdapter.cutSelection();
             }
         }
+        canCopy() {
+            return this.treeAdapter.canCopy();
+        }
         copySelection() {
             this.treeAdapter.copySelection();
+        }
+        canPaste() {
+            return this.treeAdapter.canPaste();
         }
         pasteSelection() {
             if (this.editable) {
                 this.treeAdapter.pasteSelection();
             }
         }
+        canDelete() {
+            return this.treeAdapter.canDelete();
+        }
         deleteSelection() {
             if (this.editable) {
                 this.treeAdapter.deleteSelection();
             }
         }
-        onFocus() {
+        onFocus = () => {
             const navigationStore = this.context.navigationStore;
             if (isPartOfNavigation(this.props.navigationObject)) {
                 navigationStore.setSelectedPanel(this);
             }
-        }
+        };
 
         onSearchChange(event: any) {
             this.searchText = ($(event.target).val() as string).trim();
@@ -325,6 +345,18 @@ export const StylesTreeNavigation = observer(
                         key="add"
                         treeAdapter={this.treeAdapter}
                         navigationObject={this.props.navigationObject}
+                        onAdd={() => {
+                            const treeElement:
+                                | HTMLDivElement
+                                | undefined
+                                | null =
+                                this.divRef.current?.querySelector(
+                                    ".EezStudio_Tree"
+                                );
+                            if (treeElement) {
+                                treeElement.focus();
+                            }
+                        }}
                     />
                 );
 
@@ -334,7 +366,10 @@ export const StylesTreeNavigation = observer(
             }
 
             return (
-                <div className="EezStudio_ProjectEditor_StylesTreeNavigation">
+                <div
+                    className="EezStudio_ProjectEditor_StylesTreeNavigation"
+                    ref={this.divRef}
+                >
                     <div className="EezStudio_Title">
                         <SortControl
                             direction={this.sortDirection}
@@ -359,7 +394,7 @@ export const StylesTreeNavigation = observer(
                     <Tree
                         treeAdapter={this.treeAdapter}
                         tabIndex={0}
-                        onFocus={this.onFocus.bind(this)}
+                        onFocus={this.onFocus}
                         onEditItem={this.editable ? onEditItem : undefined}
                         renderItem={renderItem}
                         onFilesDrop={this.props.onFilesDrop}

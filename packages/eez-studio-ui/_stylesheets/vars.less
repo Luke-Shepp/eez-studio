@@ -1,7 +1,7 @@
 @backgroundColor: var(--bs-body-bg);
 @textColor: var(--bs-body-color);
 @sectionBackgroundColor: #f0f0f0;
-@borderColor: #e0e0e0;
+@borderColor: #e2e2e2;
 @darkBorderColor: #c5c5c5;
 @panelHeaderColor: var(--bs-tertiary-bg);
 @selectionBackgroundColor: #337bb7;
@@ -28,12 +28,14 @@
 @warningColor: #212529;
 @actionHoverColor: #0056b3;
 @connectionLineColor: #999;
+@trixToolbarColor: #eee;
 
 @selectedConnectionLineColor: red;
 @seqConnectionLineColor: #3fadb5;
 @activeConnectionLineColor: blue;
 @connectionLineInTheMakingColor: #337bb7;
 @activeTabBackgroundColor: #ffffff;
+@disabledConnectionLineColor: #aaa;
 
 @actionSelectedTextColor: white;
 @actionDisabledColor: #ccc;
@@ -65,6 +67,7 @@
 @calendarMonthBackgroundDayLevel4BackgroundColor: #196127;
 @calendarMonthBackgroundDayLevel4Color: white;
 
+@unknownHistoryItemBackgroundColor: #ffb09c;
 @answerHistoryItemBackgroundColor: lightblue;
 @connectFailedHistoryItemColor: orange;
 @connectedHistoryItemColor: darkgreen;
@@ -91,7 +94,7 @@
 @componentShadow: 1px 1px 4px rgba(22, 33, 74, 0.2);
 @componentBodyShadow: none;
 
-@panelHeaderColorInsideFlexLayout: #e6eaed;
+@panelHeaderColorInsideFlexLayout: var(--bs-tertiary-bg);
 
 @formControlBorderColor: #ced4da;
 
@@ -99,3 +102,12 @@
 @pageTimelineSelectedRowColor: #a0a0a0;
 
 @documentationHeadingColor: #0066cc;
+
+@inErrorTextColor: @textColor;
+@inErrorBackgroundColor: #ffcccc;
+
+@tipBoxColor: @textColor;
+@tipBoxBackgroundColor: #e6f6e6;
+@tipBoxBorderColor: #c3e6c3;
+
+@modalDialogDropdownShadow: 4px 4px 16px rgba(64, 64, 64, 0.5);

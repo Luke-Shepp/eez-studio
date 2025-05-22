@@ -1,5 +1,12 @@
 import React from "react";
-import { action, computed, makeObservable } from "mobx";
+import ReactDOM from "react-dom";
+import {
+    action,
+    computed,
+    makeObservable,
+    observable,
+    runInAction
+} from "mobx";
 import { observer } from "mobx-react";
 import { ButtonAction, IconAction } from "eez-studio-ui/action";
 import { BuildConfiguration } from "project-editor/project/project";
@@ -13,11 +20,21 @@ import {
 import { RenderVariableStatus } from "project-editor/features/variable/global-variable-status";
 import { FlowTabState } from "project-editor/flow/flow-tab-state";
 import { RuntimeType } from "project-editor/project/project-type-traits";
-import { RUN_ICON } from "project-editor/ui-components/icons";
+import {
+    PROJECT_EDITOR_SCRAPBOOK,
+    RUN_ICON
+} from "project-editor/ui-components/icons";
 import { getEditorComponent } from "./EditorComponentFactory";
 import { getId } from "project-editor/core/object";
 import type { IObjectVariableValue } from "eez-studio-types";
 import { getObjectVariableTypeFromType } from "project-editor/features/variable/value-type";
+import {
+    isScrapbookItemFilePath,
+    showScrapbookManager,
+    model as scrapbookModel
+} from "project-editor/store/scrapbook";
+import { closest } from "eez-studio-shared/dom";
+import { Icon } from "eez-studio-ui/icon";
 
 ////////////////////////////////////////////////////////////////////////////////
 
@@ -35,11 +52,17 @@ export const Toolbar = observer(
                     variable.type
                 );
                 if (objectVariableType) {
-                    const objectVariableValue:
-                        | IObjectVariableValue
-                        | undefined = this.context.dataContext.get(
-                        variable.fullName
-                    );
+                    let objectVariableValue: IObjectVariableValue | undefined =
+                        this.context.dataContext.get(variable.fullName);
+
+                    if (objectVariableValue) {
+                        const managedValue = objectVariableType.getValue
+                            ? objectVariableType.getValue(objectVariableValue)
+                            : undefined;
+                        if (managedValue) {
+                            objectVariableValue = managedValue;
+                        }
+                    }
 
                     globalVariablesStatus.push(
                         <RenderVariableStatus
@@ -101,7 +124,7 @@ export const Toolbar = observer(
             }
 
             return (
-                <nav className="navbar justify-content-between EezStudio_ToolbarNav">
+                <nav className="navbar justify-content-between EezStudio_ProjectEditor_ToolbarNav">
                     {showEditorButtons ? <EditorButtons /> : <div />}
 
                     {showRunEditSwitchControls ? (
@@ -110,10 +133,7 @@ export const Toolbar = observer(
                         <div />
                     )}
 
-                    <div
-                        className="EezStudio_FlowRuntimeControls"
-                        style={{ width: 0, justifyContent: "flex-end" }}
-                    >
+                    <div className="EezStudio_ProjectEditor_ToolbarNav_FlowRuntimeControls">
                         {globalVariablesStatuses}
                     </div>
                 </nav>
@@ -235,13 +255,7 @@ const EditorButtons = observer(
                 );
 
             return (
-                <div
-                    style={{
-                        width: 0,
-                        justifyContent: "flex-start",
-                        display: "flex"
-                    }}
-                >
+                <div className="EezStudio_ProjectEditor_ToolbarNav_EditorButtons">
                     {!this.context.runtime && (
                         <div className="btn-group" role="group">
                             <IconAction
@@ -254,28 +268,69 @@ const EditorButtons = observer(
                     )}
 
                     {!this.context.runtime && (
-                        <div className="btn-group" role="group">
-                            <IconAction
-                                title={
-                                    this.context.undoManager.canUndo
-                                        ? `Undo "${this.context.undoManager.undoDescription}"`
-                                        : ""
-                                }
-                                icon="material:undo"
-                                onClick={() => this.context.undoManager.undo()}
-                                enabled={this.context.undoManager.canUndo}
-                            />
-                            <IconAction
-                                title={
-                                    this.context.undoManager.canRedo
-                                        ? `Redo "${this.context.undoManager.redoDescription}"`
-                                        : ""
-                                }
-                                icon="material:redo"
-                                onClick={() => this.context.undoManager.redo()}
-                                enabled={this.context.undoManager.canRedo}
-                            />
-                        </div>
+                        <>
+                            <div className="btn-group" role="group">
+                                <IconAction
+                                    title={
+                                        this.context.undoManager.canUndo
+                                            ? `Undo "${this.context.undoManager.undoDescription}"`
+                                            : ""
+                                    }
+                                    icon="material:undo"
+                                    onClick={() =>
+                                        this.context.undoManager.undo()
+                                    }
+                                    enabled={this.context.undoManager.canUndo}
+                                />
+                                <IconAction
+                                    title={
+                                        this.context.undoManager.canRedo
+                                            ? `Redo "${this.context.undoManager.redoDescription}"`
+                                            : ""
+                                    }
+                                    icon="material:redo"
+                                    onClick={() =>
+                                        this.context.undoManager.redo()
+                                    }
+                                    enabled={this.context.undoManager.canRedo}
+                                />
+                            </div>
+
+                            <div className="btn-group" role="group">
+                                {false && (
+                                    <IconAction
+                                        title="Cut"
+                                        icon="material:content_cut"
+                                        iconSize={22}
+                                        onClick={this.context.cut}
+                                        enabled={this.context.canCut}
+                                    />
+                                )}
+                                <IconAction
+                                    title="Copy"
+                                    icon="material:content_copy"
+                                    iconSize={22}
+                                    onClick={this.context.copy}
+                                    enabled={this.context.canCopy}
+                                />
+                                <IconAction
+                                    title="Paste"
+                                    icon="material:content_paste"
+                                    iconSize={22}
+                                    onClick={this.context.paste}
+                                    enabled={this.context.canPaste}
+                                />
+                            </div>
+                            <div className="btn-group" role="group">
+                                <IconAction
+                                    title="Scrapbook"
+                                    icon={PROJECT_EDITOR_SCRAPBOOK}
+                                    iconSize={24}
+                                    onClick={() => showScrapbookManager()}
+                                    selected={scrapbookModel.isVisible}
+                                />
+                            </div>
+                        </>
                     )}
 
                     {!this.context.runtime &&
@@ -308,12 +363,17 @@ const EditorButtons = observer(
                                     enabled={this.context.project._fullyLoaded}
                                 />
                             )}
-                            <IconAction
-                                title="Build"
-                                icon="material:build"
-                                onClick={() => this.context.build()}
-                                enabled={this.context.project._fullyLoaded}
-                            />
+                            {!(
+                                this.context.filePath &&
+                                isScrapbookItemFilePath(this.context.filePath)
+                            ) && (
+                                <IconAction
+                                    title="Build"
+                                    icon="material:build"
+                                    onClick={() => this.context.build()}
+                                    enabled={this.context.project._fullyLoaded}
+                                />
+                            )}
                         </div>
                     )}
 
@@ -453,6 +513,10 @@ const EditorButtons = observer(
                             })}
                         </div>
                     )}
+
+                    {this.pageTabState && (
+                        <PageZoomButton pageTabState={this.pageTabState} />
+                    )}
                 </div>
             );
         }
@@ -492,6 +556,277 @@ const SelectLanguage = observer(
     }
 );
 
+const PageZoomButton = observer(
+    class PageZoomButton extends React.Component<{
+        pageTabState: PageTabState;
+    }> {
+        static contextType = ProjectContext;
+        declare context: React.ContextType<typeof ProjectContext>;
+
+        buttonRef = React.createRef<HTMLButtonElement>();
+
+        dropDownRef = React.createRef<HTMLDivElement>();
+
+        dropDownOpen: boolean | undefined = false;
+        dropDownLeft = 0;
+        dropDownTop = 0;
+        dropDownWidth = 0;
+
+        zoomInput: string | undefined;
+
+        constructor(props: any) {
+            super(props);
+
+            makeObservable(this, {
+                dropDownOpen: observable,
+                dropDownLeft: observable,
+                dropDownTop: observable,
+                dropDownWidth: observable,
+                zoomInput: observable
+            });
+        }
+
+        get zoom() {
+            return this.globalZoom
+                ? this.context.uiStateStore.flowZoom
+                : this.props.pageTabState.transform.scale;
+        }
+
+        set zoom(value: number) {
+            runInAction(() => {
+                this.context.uiStateStore.flowZoom = value;
+            });
+
+            if (!this.globalZoom) {
+                const newTransform = this.props.pageTabState.transform.clone();
+                newTransform.scale = value;
+                runInAction(() => {
+                    this.props.pageTabState.transform = newTransform;
+                });
+            }
+        }
+
+        get globalZoom() {
+            return this.context.uiStateStore.globalFlowZoom;
+        }
+
+        set globalZoom(value: boolean) {
+            runInAction(() => {
+                if (value) {
+                    this.context.uiStateStore.flowZoom = this.zoom;
+                } else {
+                    for (const page of this.context.project.pages) {
+                        if (page == this.props.pageTabState.flow) {
+                            const newTransform =
+                                this.props.pageTabState.transform.clone();
+                            newTransform.scale = this.zoom;
+                            runInAction(() => {
+                                this.props.pageTabState.transform =
+                                    newTransform;
+                            });
+                        } else {
+                            let uiState =
+                                this.context.uiStateStore.getObjectUIState(
+                                    page,
+                                    "flow-state"
+                                );
+
+                            if (!uiState) {
+                                uiState = {};
+                            }
+
+                            uiState.transform = {
+                                translate: uiState.transform?.translate,
+                                scale: this.zoom
+                            };
+
+                            runInAction(() => {
+                                this.context.uiStateStore.updateObjectUIState(
+                                    page,
+                                    "flow-state",
+                                    uiState
+                                );
+                            });
+                        }
+                    }
+                }
+
+                this.context.uiStateStore.globalFlowZoom = value;
+            });
+        }
+
+        setDropDownOpen = action((open: boolean) => {
+            if (this.dropDownOpen === false) {
+                document.removeEventListener(
+                    "pointerdown",
+                    this.onDocumentPointerDown,
+                    true
+                );
+            }
+
+            this.dropDownOpen = open;
+
+            if (this.dropDownOpen) {
+                document.addEventListener(
+                    "pointerdown",
+                    this.onDocumentPointerDown,
+                    true
+                );
+            }
+        });
+
+        openDropdown = action(() => {
+            const buttonEl = this.buttonRef.current;
+            if (!buttonEl) {
+                return;
+            }
+
+            const dropDownEl = this.dropDownRef.current;
+            if (!dropDownEl) {
+                return;
+            }
+
+            this.setDropDownOpen(!this.dropDownOpen);
+
+            if (this.dropDownOpen) {
+                const rectInputGroup =
+                    buttonEl.parentElement!.getBoundingClientRect();
+
+                this.dropDownLeft = rectInputGroup.left;
+                this.dropDownTop = rectInputGroup.bottom;
+                this.dropDownWidth = rectInputGroup.width;
+
+                if (
+                    this.dropDownLeft + this.dropDownWidth >
+                    window.innerWidth
+                ) {
+                    this.dropDownLeft = window.innerWidth - this.dropDownWidth;
+                }
+
+                const DROP_DOWN_HEIGHT = 270;
+                if (
+                    this.dropDownTop + DROP_DOWN_HEIGHT + 20 >
+                    window.innerHeight
+                ) {
+                    this.dropDownTop =
+                        window.innerHeight - (DROP_DOWN_HEIGHT + 20);
+                }
+            }
+        });
+
+        onDocumentPointerDown = action((event: MouseEvent) => {
+            if (this.dropDownOpen) {
+                if (
+                    !closest(
+                        event.target,
+                        el =>
+                            this.buttonRef.current == el ||
+                            this.dropDownRef.current == el
+                    )
+                ) {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    this.setDropDownOpen(false);
+                }
+            }
+        });
+
+        render() {
+            const portal = ReactDOM.createPortal(
+                <div
+                    ref={this.dropDownRef}
+                    className="dropdown-menu dropdown-menu-end EezStudio_PageZoomButton_DropdownContent shadow rounded"
+                    style={{
+                        display: this.dropDownOpen ? "block" : "none",
+                        left: this.dropDownLeft,
+                        top: this.dropDownTop,
+                        width: this.dropDownWidth
+                    }}
+                >
+                    <ul>
+                        <div className="EezStudio_PageZoomButton_DropdownContent_ZoomInput">
+                            <input
+                                type="text"
+                                className="form-control"
+                                value={
+                                    this.zoomInput ??
+                                    `${Math.round(this.zoom * 100)}%`
+                                }
+                                onChange={action(event => {
+                                    this.zoomInput = event.target.value;
+                                })}
+                                onKeyDown={event => {
+                                    if (event.key === "Enter") {
+                                        let value = parseInt(
+                                            this.zoomInput!.replace("%", "")
+                                        );
+                                        if (value) {
+                                            if (value < 5) value = 5;
+                                            else if (value > 1600) value = 1600;
+
+                                            this.zoom = value / 100;
+                                        }
+                                        this.zoomInput = undefined;
+                                        this.setDropDownOpen(false);
+                                    }
+                                }}
+                            />
+                        </div>
+                        <hr className="dropdown-divider" />
+                        {[10, 25, 50, 75, 100, 150, 200, 400, 800, 1600].map(
+                            zoom => (
+                                <li
+                                    key={zoom}
+                                    className="EezStudio_PageZoomButton_DropdownContent_MenuItem"
+                                    onClick={() => {
+                                        this.zoom = zoom / 100;
+                                        this.setDropDownOpen(false);
+                                    }}
+                                >
+                                    Zoom to {zoom}%
+                                </li>
+                            )
+                        )}
+                        <hr className="dropdown-divider" />
+                        <li
+                            className="EezStudio_PageZoomButton_DropdownContent_Checkmark"
+                            onClick={() => {
+                                this.globalZoom = !this.globalZoom;
+                                this.setDropDownOpen(false);
+                            }}
+                        >
+                            {this.globalZoom ? (
+                                <Icon icon="material:check_box" size={20} />
+                            ) : (
+                                <Icon
+                                    icon="material:check_box_outline_blank"
+                                    size={20}
+                                />
+                            )}
+                            <span style={{ paddingLeft: 2 }}>Global zoom</span>
+                        </li>
+                    </ul>
+                </div>,
+                document.body
+            );
+
+            return (
+                <div className="btn-group" role="group">
+                    <button
+                        ref={this.buttonRef}
+                        className="btn btn-primary dropdown-toggle EezStudio_PageZoomButton"
+                        type="button"
+                        onClick={this.openDropdown}
+                    >
+                        {Math.round(this.zoom * 100)}%
+                    </button>
+                    {portal}
+                </div>
+            );
+        }
+    }
+);
+
 ////////////////////////////////////////////////////////////////////////////////
 
 const RunEditSwitchControls = observer(
@@ -502,7 +837,7 @@ const RunEditSwitchControls = observer(
         render() {
             const iconSize = 30;
             return (
-                <div className="EezStudio_ProjectEditor_RunEditSwitchControls d-flex">
+                <div className="EezStudio_ProjectEditor_ToolbarNav_RunEditSwitchControls">
                     <ButtonAction
                         text="Edit"
                         title="Enter edit mode (Shift+F5)"

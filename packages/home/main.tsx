@@ -24,8 +24,8 @@ import { LineMarkers } from "project-editor/flow/connection-line/ConnectionLineC
 
 import "home/settings";
 import { extensionsCatalog } from "./extensions-manager/catalog";
-import { initProjectEditor } from "project-editor/project-editor-bootstrap";
 import { buildProject } from "home/build-project";
+import { layoutModels } from "eez-studio-ui/side-dock";
 
 configure({ enforceActions: "observed", useProxies: "always" });
 
@@ -52,6 +52,8 @@ async function beforeAppClose() {
         destroyExtensions
     } = require("eez-studio-shared/extensions/extensions");
     destroyExtensions();
+
+    layoutModels.saveToLocalStorage();
 
     return true;
 }
@@ -80,14 +82,6 @@ ipcRenderer.on(
         importInstrumentDefinition(filePath);
     }
 );
-
-ipcRenderer.on("show-documentation-browser", async () => {
-    const { showDocumentationBrowser } = await import(
-        "home/documentation-browser"
-    );
-    await initProjectEditor(tabs, ProjectEditorTab);
-    showDocumentationBrowser();
-});
 
 ipcRenderer.on("show-about-box", async () => {
     showAboutBox();

@@ -1,9 +1,9 @@
 import React from "react";
 import ReactDOM from "react-dom";
 import { observer } from "mobx-react";
-import type * as ReactColorModule from "react-color";
+import Chrome from "@uiw/react-color-chrome";
 
-import { isDark, isValid } from "eez-studio-shared/color";
+import { isDark, isLight, isValid } from "eez-studio-shared/color";
 
 import { getProperty } from "project-editor/core/object";
 import { getEezStudioDataFromDragEvent } from "project-editor/store";
@@ -12,7 +12,7 @@ import { getThemedColor } from "project-editor/features/style/theme";
 
 import { ProjectContext } from "project-editor/project/context";
 import { settingsController } from "home/settings";
-import { action, observable, makeObservable } from "mobx";
+import { action, observable, makeObservable, runInAction } from "mobx";
 import { closest } from "eez-studio-shared/dom";
 import tinycolor from "tinycolor2";
 
@@ -24,6 +24,7 @@ export const ThemedColorInput = observer(
         value: any;
         onChange: (newValue: any) => void;
         readOnly: boolean;
+        onClick?: (event: React.MouseEvent) => void;
     }> {
         static contextType = ProjectContext;
         declare context: React.ContextType<typeof ProjectContext>;
@@ -33,6 +34,20 @@ export const ThemedColorInput = observer(
         dropDownOpen: boolean | undefined = undefined;
         dropDownLeft = 0;
         dropDownTop = 0;
+
+        colorHSV: any;
+
+        constructor(props: any) {
+            super(props);
+
+            makeObservable(this, {
+                dropDownOpen: observable,
+                dropDownLeft: observable,
+                dropDownTop: observable,
+                setDropDownOpen: action,
+                colorHSV: observable
+            });
+        }
 
         onDragOver = (event: React.DragEvent) => {
             event.preventDefault();
@@ -47,9 +62,17 @@ export const ThemedColorInput = observer(
         onDrop = (event: React.DragEvent) => {
             event.stopPropagation();
             event.preventDefault();
+
+            if (this.props.onClick) {
+                this.props.onClick(event as any);
+            }
+
             var data = getEezStudioDataFromDragEvent(this.context, event);
             if (data && data.objectClassName === "Color" && data.object) {
-                this.props.onChange(getProperty(data.object, "name"));
+                let value = getProperty(data.object, "name");
+                setTimeout(() => {
+                    this.props.onChange(value);
+                });
             }
         };
 
@@ -61,21 +84,6 @@ export const ThemedColorInput = observer(
         onChangeColor = (color: string, completed: boolean) => {
             this.props.onChange(color);
         };
-
-        constructor(props: {
-            value: any;
-            onChange: (newValue: any) => void;
-            readOnly: boolean;
-        }) {
-            super(props);
-
-            makeObservable(this, {
-                dropDownOpen: observable,
-                dropDownLeft: observable,
-                dropDownTop: observable,
-                setDropDownOpen: action
-            });
-        }
 
         setDropDownOpen(open: boolean) {
             if (this.dropDownOpen === false) {
@@ -121,10 +129,15 @@ export const ThemedColorInput = observer(
             if (this.dropDownOpen) {
                 const rectButton = buttonEl.getBoundingClientRect();
 
-                const DROP_DOWN_WIDTH = 280;
+                const DROP_DOWN_WIDTH = 230;
+                const DROP_DOWN_HEIGHT = 268;
 
                 this.dropDownLeft = rectButton.right - DROP_DOWN_WIDTH;
-                this.dropDownTop = rectButton.bottom;
+
+                this.dropDownTop = rectButton.bottom - 9;
+                if (this.dropDownTop + DROP_DOWN_HEIGHT > window.innerHeight) {
+                    this.dropDownTop = window.innerHeight - DROP_DOWN_HEIGHT;
+                }
             }
         });
 
@@ -164,34 +177,37 @@ export const ThemedColorInput = observer(
                     ? settingsController.isDarkTheme
                         ? "black"
                         : "white"
-                    : getThemedColor(this.context, value);
+                    : getThemedColor(this.context, value).colorValue;
 
             if (!isValid(color)) {
                 color = settingsController.isDarkTheme ? "black" : "white";
             }
 
-            const { SketchPicker } =
-                require("react-color") as typeof ReactColorModule;
-
             const portal = ReactDOM.createPortal(
                 <div
                     ref={this.dropDownRef}
-                    className="dropdown-menu dropdown-menu-end EezStudio_ThemedColorInput_DropdownContent shadow rounded"
+                    className="dropdown-menu dropdown-menu-end EezStudio_ThemedColorInput_DropdownContent"
                     style={{
                         display: this.dropDownOpen ? "block" : "none",
                         left: this.dropDownLeft,
                         top: this.dropDownTop
                     }}
                 >
-                    <SketchPicker
-                        width="260px"
-                        color={color}
-                        disableAlpha={true}
-                        presetColors={[]}
-                        onChange={color => this.onChangeColor(color.hex, false)}
-                        onChangeComplete={color => {
-                            this.onChangeColor(color.hex, true);
+                    <Chrome
+                        color={
+                            this.dropDownOpen && this.colorHSV
+                                ? this.colorHSV
+                                : color
+                        }
+                        showAlpha={false}
+                        onChange={color => {
+                            runInAction(() => {
+                                this.colorHSV = color.hsv;
+                            });
+
+                            this.onChangeColor(color.hex, false);
                         }}
+                        placement={"" as any}
                     />
                 </div>,
                 document.body
@@ -203,7 +219,11 @@ export const ThemedColorInput = observer(
                         ref={this.props.inputRef}
                         className="form-control"
                         style={{
-                            color: isDark(tinycolor(color).toHexString())
+                            color: settingsController.isDarkTheme
+                                ? isLight(tinycolor(color).toHexString())
+                                    ? "#000"
+                                    : undefined
+                                : isDark(tinycolor(color).toHexString())
                                 ? "#fff"
                                 : undefined,
                             backgroundColor: tinycolor(color).toHexString()
@@ -214,6 +234,7 @@ export const ThemedColorInput = observer(
                         readOnly={readOnly}
                         onDrop={this.onDrop}
                         onDragOver={this.onDragOver}
+                        onClick={this.props.onClick}
                     />
                     {!readOnly && (
                         <>

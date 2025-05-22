@@ -67,6 +67,10 @@ class ViewState implements IViewState {
         this.flowContext.tabState.resetTransform();
     }
 
+    centerView() {
+        this.flowContext.tabState.centerView();
+    }
+
     getResizeHandlers(): IResizeHandler[] | undefined {
         const isEditor = this.document && !this.document.projectStore.runtime;
 
@@ -362,7 +366,7 @@ export class EditorFlowContext implements IFlowContext {
 
         this.dataContext =
             this.document.projectStore.dataContext.createWithLocalVariables(
-                this.flow.localVariables
+                this.flow.userPropertiesAndLocalVariables
             );
     }
 }

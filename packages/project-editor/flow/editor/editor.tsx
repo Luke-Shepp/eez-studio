@@ -23,7 +23,7 @@ import { Draggable } from "eez-studio-ui/draggable";
 
 import { settingsController } from "home/settings";
 
-import { setParent, getId } from "project-editor/core/object";
+import { setParent, getId, getParent } from "project-editor/core/object";
 import type { TreeObjectAdapter } from "project-editor/core/objectAdapter";
 import { DragAndDropManager } from "project-editor/core/dd";
 
@@ -61,7 +61,8 @@ import {
     DragMouseHandler,
     isSelectionMoveable,
     ResizeMouseHandler,
-    RubberBandSelectionMouseHandler
+    RubberBandSelectionMouseHandler,
+    LVGLPanMouseHandler
 } from "project-editor/flow/editor/mouse-handler";
 import { Svg, ComponentEnclosure } from "project-editor/flow/editor/render";
 import { ConnectionLines } from "project-editor/flow/connection-line/ConnectionLineComponent";
@@ -128,57 +129,69 @@ const AllConnectionLines = observer(
 
 ////////////////////////////////////////////////////////////////////////////////
 
-function CenterLines({ flowContext }: { flowContext: EditorFlowContext }) {
-    const transform = flowContext.viewState.transform;
+const CenterLines = observer(
+    class CenterLines extends React.Component<{
+        flowContext: EditorFlowContext;
+    }> {
+        render() {
+            const { flowContext } = this.props;
 
-    const CENTER_LINES_COLOR = settingsController.isDarkTheme ? "#444" : "#eee";
-    const CENTER_LINES_WIDTH = 1 / transform.scale;
+            const transform = flowContext.viewState.transform;
 
-    const centerLineStyle = {
-        fill: "url(#page-background)",
-        stroke: CENTER_LINES_COLOR,
-        strokeWidth: CENTER_LINES_WIDTH
-    };
+            const CENTER_LINES_COLOR = settingsController.isDarkTheme
+                ? "#666"
+                : "#ddd";
+            const CENTER_LINES_WIDTH = 1 / transform.scale;
 
-    const center = flowContext.editorOptions.center!;
+            const centerLineStyle = {
+                fill: "url(#page-background)",
+                stroke: CENTER_LINES_COLOR,
+                strokeWidth: CENTER_LINES_WIDTH
+            };
 
-    const pageRect = transform.clientToPageRect(transform.clientRect);
+            const center = flowContext.editorOptions.center!;
 
-    let pageFlowRect;
-    if (flowContext.flow instanceof ProjectEditor.PageClass) {
-        pageFlowRect = flowContext.flow.pageRect;
-    }
+            const pageRect = transform.clientToPageRect(transform.clientRect);
 
-    return (
-        <Svg flowContext={flowContext}>
-            {pageFlowRect &&
-                !flowContext.projectStore.project.settings.general
-                    .circularDisplay && (
-                    <rect
-                        x={pageFlowRect.left}
-                        y={pageFlowRect.top}
-                        width={pageFlowRect.width}
-                        height={pageFlowRect.height}
+            let pageFlowRect;
+            if (flowContext.flow instanceof ProjectEditor.PageClass) {
+                pageFlowRect = flowContext.flow.pageRect;
+            }
+
+            return (
+                <Svg flowContext={flowContext}>
+                    {pageFlowRect &&
+                        !flowContext.projectStore.project.settings.general
+                            .circularDisplay &&
+                        flowContext.projectStore.project.settings.general
+                            .displayBorderRadius == 0 && (
+                            <rect
+                                x={pageFlowRect.left}
+                                y={pageFlowRect.top}
+                                width={pageFlowRect.width}
+                                height={pageFlowRect.height}
+                                style={centerLineStyle}
+                            />
+                        )}
+                    <line
+                        x1={pageRect.left}
+                        y1={center.y}
+                        x2={pageRect.left + pageRect.width}
+                        y2={center.y}
                         style={centerLineStyle}
                     />
-                )}
-            <line
-                x1={pageRect.left}
-                y1={center.y}
-                x2={pageRect.left + pageRect.width}
-                y2={center.y}
-                style={centerLineStyle}
-            />
-            <line
-                x1={center.x}
-                y1={pageRect.top}
-                x2={center.x}
-                y2={pageRect.top + pageRect.height}
-                style={centerLineStyle}
-            />
-        </Svg>
-    );
-}
+                    <line
+                        x1={center.x}
+                        y1={pageRect.top}
+                        x2={center.x}
+                        y2={pageRect.top + pageRect.height}
+                        style={centerLineStyle}
+                    />
+                </Svg>
+            );
+        }
+    }
+);
 
 ////////////////////////////////////////////////////////////////////////////////
 
@@ -191,8 +204,7 @@ export const Canvas = observer(
         dragSnapLines: DragSnapLines;
     }> {
         div: HTMLDivElement;
-        resizeObserver: ResizeObserver;
-        clientRectChangeDetectionAnimationFrameHandle: any;
+        updateClientRectRequestAnimationFrameId: any;
         deltaY = 0;
 
         dragScrollDispose: (() => void) | undefined;
@@ -211,10 +223,6 @@ export const Canvas = observer(
                 onDragStart: action.bound,
                 onDragEnd: action.bound
             });
-
-            this.resizeObserver = new ResizeObserver(
-                this.resizeObserverCallback
-            );
         }
 
         _mouseHandler: IMouseHandler | undefined;
@@ -274,9 +282,7 @@ export const Canvas = observer(
             }
         }
 
-        resizeObserverCallback = () => {
-            this.clientRectChangeDetectionAnimationFrameHandle = undefined;
-
+        updateClientRect = () => {
             if ($(this.div).is(":visible")) {
                 const transform = this.props.flowContext.viewState.transform;
 
@@ -294,6 +300,9 @@ export const Canvas = observer(
                     });
                 }
             }
+
+            this.updateClientRectRequestAnimationFrameId =
+                requestAnimationFrame(this.updateClientRect);
         };
 
         componentDidMount() {
@@ -303,13 +312,7 @@ export const Canvas = observer(
                 passive: false
             });
 
-            if (this.div) {
-                this.resizeObserver.observe(this.div);
-            }
-        }
-
-        componentDidUpdate() {
-            this.resizeObserverCallback();
+            this.updateClientRect();
         }
 
         componentWillUnmount() {
@@ -317,9 +320,7 @@ export const Canvas = observer(
 
             this.div.removeEventListener("wheel", this.onWheel);
 
-            if (this.div) {
-                this.resizeObserver.unobserve(this.div);
-            }
+            cancelAnimationFrame(this.updateClientRectRequestAnimationFrameId);
         }
 
         onWheel = (event: WheelEvent) => {
@@ -328,15 +329,74 @@ export const Canvas = observer(
                 return;
             }
 
-            if (this.mouseHandler instanceof PanMouseHandler) {
+            if (
+                this.mouseHandler instanceof PanMouseHandler ||
+                this.mouseHandler instanceof LVGLPanMouseHandler
+            ) {
                 return;
             }
 
             const transform =
                 this.props.flowContext.viewState.transform.clone();
 
-            if (event.ctrlKey) {
-                this.deltaY += event.deltaY;
+            const flowContext = this.props.flowContext;
+
+            let deltaX = event.deltaX;
+            let deltaY = event.deltaY;
+
+            if (
+                event.altKey &&
+                flowContext.projectStore.projectTypeTraits.isLVGL
+            ) {
+                let point =
+                    flowContext.viewState.transform.pointerEventToPagePoint(
+                        event
+                    );
+                const object = flowContext.document.objectFromPoint(point);
+                if (object) {
+                    const objectAdapter = flowContext.document.findObjectById(
+                        object.id
+                    );
+                    if (objectAdapter) {
+                        let object = objectAdapter.object;
+                        while (object) {
+                            if (
+                                object instanceof ProjectEditor.LVGLWidgetClass
+                            ) {
+                                const lvglWidget = object;
+                                if (
+                                    lvglWidget.widgetFlags.indexOf(
+                                        "SCROLLABLE"
+                                    ) != -1 &&
+                                    lvglWidget.children.length > 0
+                                ) {
+                                    if (Math.abs(deltaX) == 100) deltaX /= 5;
+                                    if (Math.abs(deltaY) == 100) deltaY /= 5;
+
+                                    let xScroll =
+                                        lvglWidget._xScroll2 +
+                                        (event.shiftKey ? deltaY : deltaX);
+
+                                    let yScroll =
+                                        lvglWidget._yScroll2 +
+                                        (event.shiftKey ? deltaX : deltaY);
+
+                                    runInAction(() => {
+                                        lvglWidget._xScroll =
+                                            lvglWidget._xScroll2 = xScroll;
+                                        lvglWidget._yScroll =
+                                            lvglWidget._yScroll2 = yScroll;
+                                    });
+
+                                    break;
+                                }
+                            }
+                            object = getParent(object);
+                        }
+                    }
+                }
+            } else if (event.ctrlKey) {
+                this.deltaY += deltaY;
                 if (Math.abs(this.deltaY) > 10) {
                     let scale: number;
                     if (this.deltaY < 0) {
@@ -375,10 +435,10 @@ export const Canvas = observer(
                 transform.translate = {
                     x:
                         transform.translate.x -
-                        (event.shiftKey ? event.deltaY : event.deltaX),
+                        (event.shiftKey ? deltaY : deltaX),
                     y:
                         transform.translate.y -
-                        (event.shiftKey ? event.deltaX : event.deltaY)
+                        (event.shiftKey ? deltaX : deltaY)
                 };
 
                 runInAction(() => {
@@ -523,14 +583,60 @@ export const Canvas = observer(
             this.buttonsAtDown = event.buttons;
 
             if (this.mouseHandler) {
-                this.mouseHandler.up(this.props.flowContext);
+                this.mouseHandler.up(this.props.flowContext, true);
                 this.mouseHandler = undefined;
             }
 
             if (event.buttons && event.buttons !== 1) {
-                this.mouseHandler = new PanMouseHandler();
+                const flowContext = this.props.flowContext;
+                if (
+                    event.altKey &&
+                    flowContext.projectStore.projectTypeTraits.isLVGL
+                ) {
+                    let point =
+                        flowContext.viewState.transform.pointerEventToPagePoint(
+                            event
+                        );
+                    const object = flowContext.document.objectFromPoint(point);
+                    if (object) {
+                        const objectAdapter =
+                            flowContext.document.findObjectById(object.id);
+                        if (objectAdapter) {
+                            let object = objectAdapter.object;
+                            while (true) {
+                                if (
+                                    object instanceof
+                                    ProjectEditor.LVGLWidgetClass
+                                ) {
+                                    const lvglWidget = object;
+                                    if (
+                                        lvglWidget.widgetFlags.indexOf(
+                                            "SCROLLABLE"
+                                        ) != -1 &&
+                                        lvglWidget.children.length > 0
+                                    ) {
+                                        this.mouseHandler =
+                                            new LVGLPanMouseHandler(lvglWidget);
+                                        break;
+                                    }
+                                }
+                                object = getParent(object);
+                            }
+                        }
+                    }
+                }
+
+                if (!this.mouseHandler) {
+                    this.mouseHandler = new PanMouseHandler();
+                }
             } else {
-                this.mouseHandler = this.createMouseHandler(event);
+                if (event.altKey) {
+                    if (!this.mouseHandler) {
+                        this.mouseHandler = new PanMouseHandler();
+                    }
+                } else {
+                    this.mouseHandler = this.createMouseHandler(event);
+                }
             }
 
             if (this.mouseHandler) {
@@ -540,7 +646,8 @@ export const Canvas = observer(
                     movementX: event.movementX ?? 0,
                     movementY: event.movementY ?? 0,
                     ctrlKey: event.ctrlKey,
-                    shiftKey: event.shiftKey
+                    shiftKey: event.shiftKey,
+                    timeStamp: event.timeStamp
                 };
 
                 this.mouseHandler.down(this.props.flowContext, event);
@@ -563,23 +670,26 @@ export const Canvas = observer(
                         ? this.mouseHandler.lastPointerEvent.movementY
                         : 0,
                     ctrlKey: event.ctrlKey,
-                    shiftKey: event.shiftKey
+                    shiftKey: event.shiftKey,
+                    timeStamp: event.timeStamp
                 };
 
                 this.mouseHandler.move(this.props.flowContext, event);
             }
         };
 
-        onDragEnd(event: PointerEvent) {
+        onDragEnd(event: PointerEvent, cancel: boolean) {
             let preventContextMenu = false;
 
             if (this.mouseHandler) {
-                this.mouseHandler.up(this.props.flowContext);
+                this.mouseHandler.up(this.props.flowContext, cancel);
 
                 if (this.mouseHandler instanceof PanMouseHandler) {
                     if (pointDistance(this.mouseHandler.totalMovement) > 10) {
                         preventContextMenu = true;
                     }
+                } else if (this.mouseHandler instanceof LVGLPanMouseHandler) {
+                    preventContextMenu = true;
                 }
 
                 this.mouseHandler = undefined;
@@ -666,11 +776,15 @@ export const Canvas = observer(
 
                     setTimeout(() => {
                         const menu = context.document.createContextMenu(
-                            context.viewState.selectedObjects
+                            context.viewState.selectedObjects,
+                            { atPoint: point }
                         );
                         if (menu) {
                             if (this.mouseHandler) {
-                                this.mouseHandler.up(this.props.flowContext);
+                                this.mouseHandler.up(
+                                    this.props.flowContext,
+                                    true
+                                );
                                 this.mouseHandler = undefined;
                             }
 
@@ -814,7 +928,7 @@ export const FlowEditor = observer(
                 this.ensureSelectionVisible
             );
 
-            this.context.navigationStore.setInitialSelectedPanel(this);
+            this.context.navigationStore.mountPanel(this);
         }
 
         componentDidCatch(error: any, info: any) {
@@ -827,9 +941,7 @@ export const FlowEditor = observer(
                 this.ensureSelectionVisible
             );
 
-            if (this.context.navigationStore.selectedPanel === this) {
-                this.context.navigationStore.setSelectedPanel(undefined);
-            }
+            this.context.navigationStore.unmountPanel(this);
         }
 
         ensureSelectionVisible = () => {
@@ -858,15 +970,15 @@ export const FlowEditor = observer(
                     );
 
                 if (!rectContains(pageRect, selectionBoundingRect)) {
-                    const selectionEl = this.divRef.current?.querySelector(
-                        ".EezStudio_FlowEditorSelection"
-                    ) as HTMLDivElement;
-                    const canvasEl = this.divRef.current?.querySelector(
-                        ".eez-canvas"
-                    ) as HTMLCanvasElement;
+                    // const selectionEl = this.divRef.current?.querySelector(
+                    //     ".EezStudio_FlowEditorSelection"
+                    // ) as HTMLDivElement;
+                    // const canvasEl = this.divRef.current?.querySelector(
+                    //     ".eez-canvas"
+                    // ) as HTMLCanvasElement;
 
-                    canvasEl.style.transition = "transform 0.2s";
-                    selectionEl.style.display = "none";
+                    // canvasEl.style.transition = "transform 0.2s";
+                    // selectionEl.style.display = "none";
 
                     this.flowContext.viewState.transform.translate = {
                         x: -(
@@ -879,10 +991,10 @@ export const FlowEditor = observer(
                         )
                     };
 
-                    setTimeout(() => {
-                        canvasEl.style.transition = "";
-                        selectionEl.style.display = "block";
-                    }, 200);
+                    // setTimeout(() => {
+                    //     canvasEl.style.transition = "";
+                    //     selectionEl.style.display = "block";
+                    // }, 200);
                 }
 
                 this.props.tabState.onEnsureSelectionVisibleIsDone();
@@ -896,14 +1008,26 @@ export const FlowEditor = observer(
         get selectedObjects() {
             return this.props.tabState.widgetContainer.selectedObjects;
         }
+        canCut() {
+            return this.props.tabState.widgetContainer.canCut();
+        }
         cutSelection() {
             this.props.tabState.widgetContainer.cutSelection();
+        }
+        canCopy() {
+            return this.props.tabState.widgetContainer.canCopy();
         }
         copySelection() {
             this.props.tabState.widgetContainer.copySelection();
         }
+        canPaste() {
+            return this.props.tabState.widgetContainer.canPaste();
+        }
         pasteSelection() {
             this.flowContext.document.pasteSelection();
+        }
+        canDelete() {
+            return this.props.tabState.widgetContainer.canDelete();
         }
         deleteSelection() {
             this.props.tabState.widgetContainer.deleteSelection();
@@ -1030,7 +1154,7 @@ export const FlowEditor = observer(
             if (this.flowContext.dragComponent) {
                 const flow = this.props.tabState.widgetContainer.object as Flow;
 
-                const object = this.context.addObject(
+                let object = this.context.addObject(
                     flow.components,
                     this.flowContext.dragComponent
                 );
@@ -1084,11 +1208,17 @@ export const FlowEditor = observer(
                 }
             } else if (event.ctrlKey) {
                 if (event.keyCode == "X".charCodeAt(0)) {
+                    event.preventDefault();
+                    event.stopPropagation();
                     this.cutSelection();
                 } else if (event.keyCode == "C".charCodeAt(0)) {
+                    event.preventDefault();
+                    event.stopPropagation();
                     this.copySelection();
                 } else if (event.keyCode == "V".charCodeAt(0)) {
-                    this.pasteSelection();
+                    event.preventDefault();
+                    event.stopPropagation();
+                    this.context.paste();
                 }
             } else if (event.keyCode == 46) {
                 // delete

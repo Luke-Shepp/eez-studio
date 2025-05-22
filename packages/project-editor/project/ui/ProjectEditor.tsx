@@ -31,7 +31,6 @@ import { ActiveFlowsPanel } from "project-editor/flow/debugger/ActiveFlowsPanel"
 import { LogsPanel } from "project-editor/flow/debugger/LogsPanel";
 import { ListNavigation } from "project-editor/ui-components/ListNavigation";
 import { VariablesTab } from "project-editor/features/variable/VariablesNavigation";
-import { FlowStructureTab } from "project-editor/flow/FlowStructureTab";
 import { StylesTab } from "project-editor/features/style/StylesNavigation";
 import { FontsTab } from "project-editor/features/font/FontsNavigation";
 import { BitmapsTab } from "project-editor/features/bitmap/BitmapsNavigation";
@@ -46,6 +45,9 @@ import {
     downloadAndInstallExtension,
     extensionsManagerStore
 } from "home/extensions-manager/extensions-manager";
+import { LVGLGroupsTab } from "project-editor/lvgl/groups";
+import { settingsController } from "home/settings";
+import { PageStructure } from "project-editor/features/page/PagesNavigation";
 
 ////////////////////////////////////////////////////////////////////////////////
 
@@ -77,7 +79,7 @@ export const ProjectEditorView = observer(
 
             return (
                 <div className="EezStudio_ProjectEditorWrapper">
-                    <div className="EezStudio_ProjectEditorMainContentWrapper">
+                    <div className="EezStudio_ProjectEditor_MainContentWrapper">
                         {this.props.showToolbar && <Toolbar />}
                         <Content />
                     </div>
@@ -93,6 +95,8 @@ const Content = observer(
     class Content extends React.Component {
         static contextType = ProjectContext;
         declare context: React.ContextType<typeof ProjectContext>;
+
+        _prevPageTabState: PageTabState | undefined;
 
         componentDidMount(): void {
             this.context.editorsStore?.openInitialEditors();
@@ -143,7 +147,7 @@ const Content = observer(
             }
 
             if (component === "flow-structure") {
-                return <FlowStructureTab />;
+                return <PageStructure />;
             }
 
             if (component === "variables") {
@@ -270,6 +274,10 @@ const Content = observer(
                 return null;
             }
 
+            if (component === "lvgl-groups") {
+                return <LVGLGroupsTab />;
+            }
+
             return null;
         };
 
@@ -296,7 +304,24 @@ const Content = observer(
                     icon = <Icon icon="material:warning" className="warning" />;
                     numMessages = section.numWarnings;
                 } else {
-                    icon = <Icon icon="material:check" className="info" />;
+                    icon = (
+                        <Icon
+                            icon="material:check"
+                            className="info"
+                            style={
+                                node.getId() == LayoutModels.OUTPUT_TAB_ID &&
+                                this.context.lastSuccessfulBuildRevision ==
+                                    this.context.lastRevision
+                                    ? {
+                                          color: settingsController.isDarkTheme
+                                              ? "#27FB2C"
+                                              : "#00FF21",
+                                          fontWeight: "bold"
+                                      }
+                                    : undefined
+                            }
+                        />
+                    );
                     numMessages = 0;
                 }
 
@@ -426,6 +451,18 @@ const Content = observer(
                 this.context.runtime &&
                 !this.context.runtime.isDebuggerActive
             ) {
+                const pageTabState = new PageTabState(
+                    this.context.runtime.selectedPage,
+                    this._prevPageTabState
+                        ? this._prevPageTabState.transform
+                        : undefined
+                );
+
+                if (this.context.projectTypeTraits.isLVGL) {
+                    // prevent flickering when changing selected page
+                    this._prevPageTabState = pageTabState;
+                }
+
                 return (
                     <PageEditor
                         editor={
@@ -434,9 +471,7 @@ const Content = observer(
                                 this.context.runtime.selectedPage,
                                 undefined,
                                 undefined,
-                                new PageTabState(
-                                    this.context.runtime.selectedPage
-                                )
+                                pageTabState
                             )
                         }
                     ></PageEditor>
@@ -454,6 +489,9 @@ const Content = observer(
             checksSection.numErrors;
             checksSection.numWarnings;
             checksSection.loading;
+
+            this.context.lastRevisionStable;
+            this.context.lastSuccessfulBuildRevision;
 
             const sectionOutput = this.context.outputSectionsStore.getSection(
                 Section.OUTPUT

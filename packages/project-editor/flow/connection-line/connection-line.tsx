@@ -27,6 +27,7 @@ export class ConnectionLine extends EezObject {
     output: string;
     target: string;
     input: string;
+    disabled: boolean;
 
     _active: boolean;
 
@@ -83,8 +84,19 @@ export class ConnectionLine extends EezObject {
                 name: "input",
                 type: PropertyType.String,
                 hideInPropertyGrid: true
+            },
+            {
+                name: "disabled",
+                type: PropertyType.Boolean,
+                checkboxStyleSwitch: true
             }
         ],
+
+        beforeLoadHook(object, jsObject) {
+            if (jsObject.disabled == "undefined") {
+                jsObject.disabled = false;
+            }
+        },
 
         isSelectable: () => true,
 
@@ -217,7 +229,9 @@ export class ConnectionLine extends EezObject {
             output: observable,
             target: observable,
             input: observable,
-            _active: observable
+            _active: observable,
+            disabled: observable,
+            isVisible: computed
         });
     }
 
@@ -355,6 +369,15 @@ export class ConnectionLine extends EezObject {
 
     setActive() {
         activateConnectionLine(this);
+    }
+
+    get isVisible() {
+        return !(
+            (this.sourceComponent instanceof ProjectEditor.WidgetClass &&
+                this.sourceComponent.isHiddenInEditorDeep) ||
+            (this.targetComponent instanceof ProjectEditor.WidgetClass &&
+                this.targetComponent.isHiddenInEditorDeep)
+        );
     }
 }
 

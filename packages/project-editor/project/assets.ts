@@ -25,7 +25,7 @@ export type AssetType =
     | "actions"
     | "variables/globalVariables"
     | "allStyles"
-    | "lvglStyles/allStyles"
+    | "allLvglStyles"
     | "fonts"
     | "bitmaps"
     | "colors";
@@ -103,11 +103,37 @@ export function findStyle(project: Project, name: string | undefined) {
 }
 
 export function findLvglStyle(project: Project, name: string | undefined) {
-    return findAsset<LVGLStyle>(project, "lvglStyles/allStyles", name);
+    return findAsset<LVGLStyle>(project, "allLvglStyles", name);
 }
 
 export function findFont(project: Project, name: string | undefined) {
     return findAsset<Font>(project, "fonts", name);
+}
+
+export function findFontByVarName(
+    project: Project,
+    varName: string | undefined
+) {
+    const allAssets = project._assets.maps["name"].allAssets;
+    for (const key of allAssets.keys()) {
+        if (key.startsWith("fonts/")) {
+            const fontName = key.slice("fonts/".length);
+            const fontVarName = getName(
+                "ui_font_",
+                fontName,
+                NamingConvention.UnderscoreLowerCase
+            );
+            if (fontVarName == varName) {
+                const objects = allAssets.get(key);
+                if (objects && objects.length === 1) {
+                    return objects[0] as Font;
+                }
+                return undefined;
+            }
+        }
+    }
+
+    return undefined;
 }
 
 export function getAssetFullName<T extends EezObject & { name: string }>(
@@ -258,7 +284,7 @@ class AssetsMap {
             { path: "actions", map: this.actionsMap },
             { path: "pages", map: this.pagesMap },
             { path: "allStyles", map: this.stylesMap },
-            { path: "lvglStyles/allStyles", map: this.lvglStylesMap },
+            { path: "allLvglStyles", map: this.lvglStylesMap },
             { path: "fonts", map: this.fontsMap },
             { path: "bitmaps", map: this.bitmapsMap },
             { path: "colors", map: this.colorsMap }

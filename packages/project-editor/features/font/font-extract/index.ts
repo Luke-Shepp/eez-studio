@@ -51,6 +51,7 @@ export interface GlyphBitmap {
 export interface EncodingRange {
     from: number;
     to: number;
+    mapped_from?: number;
 }
 
 export interface Params {
@@ -70,6 +71,8 @@ export interface Params {
     getAllGlyphs?: boolean;
     lvglVersion?: string;
     lvglInclude?: string;
+    opts_string?: string;
+    lv_fallback?: string;
 }
 
 export interface IFontExtract {

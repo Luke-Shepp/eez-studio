@@ -38,7 +38,8 @@ import {
     getProject,
     ProjectType,
     findPage,
-    findVariable
+    findVariable,
+    Project
 } from "project-editor/project/project";
 
 import type {
@@ -107,6 +108,11 @@ import { showDialog } from "eez-studio-ui/dialog";
 import { EditorFlowContext } from "project-editor/flow/editor/context";
 import type { PageTabState } from "project-editor/features/page/PageEditor";
 import { ProjectContext } from "project-editor/project/context";
+import {
+    userPropertyValuesProperty,
+    getAdditionalFlowPropertiesForUserProperties,
+    UserPropertyValues
+} from "project-editor/flow/user-property";
 
 const LIST_TYPE_VERTICAL = 1;
 const LIST_TYPE_HORIZONTAL = 2;
@@ -425,12 +431,13 @@ export class ContainerWidget extends Widget {
 
         beforeLoadHook: (
             widget: ContainerWidget,
-            jsWidget: Partial<ContainerWidget>
+            jsWidget: Partial<ContainerWidget>,
+            project: Project
         ) => {
             if (jsWidget.layout == undefined) {
                 jsWidget.layout = "static";
             } else if (jsWidget.layout == "docking-manager") {
-                if (!getProject(widget).projectTypeTraits.isDashboard) {
+                if (!project.projectTypeTraits.isDashboard) {
                     jsWidget.layout = "static";
                 }
             }
@@ -1613,7 +1620,7 @@ const UserWidgetPropertyGridUI = observer(
                 return null;
             }
             return (
-                <div style={{ marginTop: 5, marginBottom: 5 }}>
+                <div style={{ display: "flex", marginTop: 5, marginBottom: 5 }}>
                     <Button
                         color="primary"
                         size="small"
@@ -1637,6 +1644,7 @@ const UserWidgetPropertyGridUI = observer(
 
 export class UserWidgetWidget extends Widget {
     userWidgetPageName: string;
+    userPropertyValues: UserPropertyValues;
     context?: string;
 
     static classInfo = makeDerivedClassInfo(Widget.classInfo, {
@@ -1648,6 +1656,7 @@ export class UserWidgetWidget extends Widget {
         flowComponentId: WIDGET_TYPE_USER_WIDGET,
 
         properties: [
+            makeDataPropertyInfo("context"),
             {
                 name: "userWidgetPageName",
                 displayName: "User widget",
@@ -1655,7 +1664,7 @@ export class UserWidgetWidget extends Widget {
                 propertyGridGroup: specificGroup,
                 referencedObjectCollectionPath: "userWidgets"
             },
-            makeDataPropertyInfo("context"),
+            userPropertyValuesProperty,
             {
                 name: "customUI",
                 type: PropertyType.Any,
@@ -1682,6 +1691,9 @@ export class UserWidgetWidget extends Widget {
                 }
             }
         ],
+
+        getAdditionalFlowProperties:
+            getAdditionalFlowPropertiesForUserProperties,
 
         beforeLoadHook: (
             widget: UserWidgetWidget,
@@ -1826,6 +1838,7 @@ export class UserWidgetWidget extends Widget {
 
         makeObservable(this, {
             userWidgetPageName: observable,
+            userPropertyValues: observable,
             context: observable
         });
     }
@@ -1916,7 +1929,7 @@ export class UserWidgetWidget extends Widget {
                 name: "@seqin",
                 type: "null",
                 isSequenceInput: true,
-                isOptionalInput: true
+                isOptionalInput: false
             }));
 
         const inputComponents: ComponentInput[] = page.components

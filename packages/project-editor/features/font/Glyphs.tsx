@@ -17,6 +17,7 @@ import { SearchInput } from "eez-studio-ui/search-input";
 
 import { Font, Glyph } from "project-editor/features/font/font";
 import { ProjectContext } from "project-editor/project/context";
+import { settingsController } from "home/settings";
 
 export const Glyphs = observer(
     class Glyphs
@@ -65,11 +66,15 @@ export const Glyphs = observer(
 
         componentDidMount() {
             this.ensureVisible();
-            this.context.navigationStore.setInitialSelectedPanel(this);
+            this.context.navigationStore.mountPanel(this);
         }
 
         componentDidUpdate() {
             this.ensureVisible();
+        }
+
+        componentWillUnmount() {
+            this.context.navigationStore.unmountPanel(this);
         }
 
         ensureVisible() {
@@ -88,21 +93,11 @@ export const Glyphs = observer(
         get selectedObject() {
             return this.props.selectedGlyph.get();
         }
-        cutSelection() {}
-        copySelection() {}
-        pasteSelection() {}
-        deleteSelection() {}
         onFocus = () => {
             if (!this.props.dialog) {
                 this.context.navigationStore.setSelectedPanel(this);
             }
         };
-
-        componentWillUnmount() {
-            if (this.context.navigationStore.selectedPanel === this) {
-                this.context.navigationStore.setSelectedPanel(undefined);
-            }
-        }
 
         render() {
             const glyphs: JSX.Element[] = this.props.glyphs
@@ -225,70 +220,86 @@ export const Glyphs = observer(
 ////////////////////////////////////////////////////////////////////////////////
 
 export const GlyphComponent = observer(
-    ({
-        glyph,
-        isSelected,
-        onSelect,
-        onDoubleClick
-    }: {
+    class GlyphComponent extends React.Component<{
         glyph: Glyph;
         isSelected: boolean;
         onSelect: () => void;
         onDoubleClick: () => void;
-    }) => {
-        const refDiv = React.useRef<HTMLDivElement>(null);
+    }> {
+        refDiv = React.createRef<HTMLDivElement>();
 
-        const canvas = document.createElement("canvas");
-        canvas.width = (glyph.glyphBitmap && glyph.glyphBitmap.width) || 1;
-        canvas.height = glyph.font.height || 1;
-        let ctx = canvas.getContext("2d")!;
-        setColor("black");
-        setBackColor("white");
-        drawGlyph(ctx, -glyph.x, 0, glyph.encoding, glyph.font);
+        setCanvas() {
+            const { glyph } = this.props;
 
-        React.useEffect(() => {
-            if (refDiv.current) {
-                if (refDiv.current.children[0]) {
-                    refDiv.current.replaceChild(
+            const canvas = document.createElement("canvas");
+            canvas.width = (glyph.glyphBitmap && glyph.glyphBitmap.width) || 1;
+            canvas.height = glyph.font.height || 1;
+            let ctx = canvas.getContext("2d")!;
+
+            if (settingsController.isDarkTheme) {
+                setColor("white");
+                setBackColor("black");
+            } else {
+                setColor("black");
+                setBackColor("white");
+            }
+
+            drawGlyph(ctx, -glyph.x, 0, glyph.encoding, glyph.font);
+
+            if (this.refDiv.current) {
+                if (this.refDiv.current.children[0]) {
+                    this.refDiv.current.replaceChild(
                         canvas,
-                        refDiv.current.children[0]
+                        this.refDiv.current.children[0]
                     );
                 } else {
-                    refDiv.current.appendChild(canvas);
+                    this.refDiv.current.appendChild(canvas);
                 }
             }
-        });
+        }
 
-        return (
-            <li
-                key={glyph.encoding}
-                className={classNames({
-                    selected: isSelected
-                })}
-                onClick={onSelect}
-                onDoubleClick={onDoubleClick}
-            >
-                <div>
-                    <div
-                        style={{
-                            width: glyph.font.maxDx,
-                            height: glyph.font.height,
-                            textAlign: "center"
-                        }}
-                        ref={refDiv}
-                    ></div>
-                    <div
-                        style={{
-                            position: "relative",
-                            width: 100,
-                            overflow: "visible",
-                            whiteSpace: "nowrap"
-                        }}
-                    >
-                        {getLabel(glyph)}
+        componentDidMount() {
+            this.setCanvas();
+        }
+
+        componentDidUpdate() {
+            this.setCanvas();
+        }
+
+        render() {
+            const { glyph, isSelected, onSelect, onDoubleClick } = this.props;
+
+            return (
+                <li
+                    key={glyph.encoding}
+                    className={classNames({
+                        selected: isSelected
+                    })}
+                    onClick={onSelect}
+                    onDoubleClick={onDoubleClick}
+                >
+                    <div>
+                        <div
+                            style={{
+                                width: glyph.font.maxDx,
+                                height: glyph.font.height,
+                                textAlign: "center"
+                            }}
+                            ref={this.refDiv}
+                        ></div>
+                        <div
+                            style={{
+                                position: "relative",
+                                width: 100,
+                                overflow: "visible",
+                                whiteSpace: "nowrap"
+                            }}
+                        >
+                            {getLabel(glyph)}
+                        </div>
                     </div>
-                </div>
-            </li>
-        );
+                </li>
+            );
+        }
     }
 );

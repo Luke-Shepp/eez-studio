@@ -1,5 +1,5 @@
 import fs from "fs";
-import { ipcRenderer } from "electron";
+import { clipboard, ipcRenderer } from "electron";
 import { getCurrentWindow } from "@electron/remote";
 import React from "react";
 import {
@@ -49,7 +49,13 @@ import {
 import { getProjectIcon } from "home/helper";
 import type { HomeTabCategory } from "eez-studio-shared/extensions/extension";
 import { homeLayoutModels } from "home/home-layout-models";
-import { homeTabStore } from "home/home-tab";
+import {
+    getScrapbookItemEezProject,
+    getScrapbookItemTabTitle,
+    isScrapbookItemFilePath,
+    model as scrapbookModel
+} from "project-editor/store/scrapbook";
+import { historySessions } from "instrument/window/history/session/store";
 
 const MODIFED_MARK = "\u002A ";
 
@@ -67,7 +73,7 @@ export interface IHomeTab extends ITab {
 
 ////////////////////////////////////////////////////////////////////////////////
 
-class HomeTab implements IHomeTab {
+export class HomeTab implements IHomeTab {
     constructor(public tabs: Tabs) {
         makeObservable(this, {
             active: observable,
@@ -389,6 +395,11 @@ export class InstrumentTab implements IHomeTab {
         }
         return true;
     }
+
+    showSessionsList() {
+        const editor = this.object.getEditor();
+        editor.navigationStore.navigateToSessionsList();
+    }
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -541,44 +552,69 @@ export class ProjectEditorTab implements IHomeTab {
             }
         };
         const undo = () => {
+            if (scrapbookModel.focused) {
+                return;
+            }
+
             if (!this.runMode) {
                 projectStore.undoManager.undo();
             }
         };
         const redo = () => {
+            if (scrapbookModel.focused) {
+                return;
+            }
+
             if (!this.runMode) {
                 projectStore.undoManager.redo();
             }
         };
         const cut = () => {
+            if (scrapbookModel.focused) {
+                return;
+            }
+
             if (!this.runMode) {
-                if (projectStore.navigationStore.selectedPanel) {
-                    projectStore.navigationStore.selectedPanel.cutSelection();
-                }
+                projectStore.cut();
             }
         };
         const copy = () => {
+            if (scrapbookModel.focused) {
+                return;
+            }
+
             if (!this.runMode) {
-                if (projectStore.navigationStore.selectedPanel) {
-                    projectStore.navigationStore.selectedPanel.copySelection();
-                }
+                projectStore.copy();
             }
         };
         const paste = () => {
+            if (scrapbookModel.focused) {
+                return;
+            }
+
             if (!this.runMode) {
-                if (projectStore.navigationStore.selectedPanel) {
-                    projectStore.navigationStore.selectedPanel.pasteSelection();
-                }
+                projectStore.paste();
             }
         };
         const deleteSelection = () => {
+            if (scrapbookModel.focused) {
+                return;
+            }
+
             if (!this.runMode) {
-                if (projectStore.navigationStore.selectedPanel) {
+                if (
+                    projectStore.navigationStore.selectedPanel &&
+                    projectStore.navigationStore.selectedPanel.deleteSelection
+                ) {
                     projectStore.navigationStore.selectedPanel.deleteSelection();
                 }
             }
         };
         const selectAll = () => {
+            if (scrapbookModel.focused) {
+                return;
+            }
+
             if (
                 projectStore.navigationStore.selectedPanel &&
                 projectStore.navigationStore.selectedPanel.selectAll
@@ -586,19 +622,65 @@ export class ProjectEditorTab implements IHomeTab {
                 projectStore.navigationStore.selectedPanel.selectAll();
             }
         };
+        const onToggleComponentsPalette = () => {
+            projectStore.layoutModels.toggleComponentsPalette();
+        };
         const onResetLayoutModels = () => {
             if (!this.runMode) {
                 projectStore.layoutModels.reset();
             }
         };
 
+        const onFindProjectComponent = () => {
+            projectStore.findProjectComponent();
+        };
+
         const onReloadProject = () => {
             this.reloadProject();
         };
 
-        const onKeyDown = (e: KeyboardEvent) => {
+        const onKeyDown = (event: KeyboardEvent) => {
+            if (scrapbookModel.focused) {
+                return;
+            }
+
             if (this.projectStore?.runtime) {
-                this.projectStore.runtime.onKeyDown(e);
+                this.projectStore.runtime.onKeyDown(event);
+            } else {
+                if (
+                    !(event.target instanceof HTMLInputElement) &&
+                    !(event.target instanceof HTMLTextAreaElement)
+                ) {
+                    if (
+                        (event.ctrlKey || event.metaKey) &&
+                        !event.shiftKey &&
+                        !event.altKey
+                    ) {
+                        if (event.key == "z") {
+                            undo();
+                        } else if (event.key == "y") {
+                            redo();
+                        } else if (event.key == "x") {
+                            cut();
+                        } else if (event.key == "c") {
+                            copy();
+                        } else if (event.key == "v") {
+                            paste();
+                        } else if (event.key == "a") {
+                            event.preventDefault();
+                            selectAll();
+                        }
+                    } else if (
+                        !event.ctrlKey &&
+                        !event.metaKey &&
+                        !event.shiftKey &&
+                        !event.altKey
+                    ) {
+                        if (event.key == "Delete") {
+                            deleteSelection();
+                        }
+                    }
+                }
             }
         };
 
@@ -619,7 +701,9 @@ export class ProjectEditorTab implements IHomeTab {
         ipcRenderer.on("delete", deleteSelection);
         ipcRenderer.on("select-all", selectAll);
 
+        ipcRenderer.on("toggleComponentsPalette", onToggleComponentsPalette);
         ipcRenderer.on("resetLayoutModels", onResetLayoutModels);
+        ipcRenderer.on("findProjectComponent", onFindProjectComponent);
 
         ipcRenderer.on("reload-project", onReloadProject);
 
@@ -644,8 +728,17 @@ export class ProjectEditorTab implements IHomeTab {
             ipcRenderer.removeListener("select-all", selectAll);
 
             ipcRenderer.removeListener(
+                "toggleComponentsPalette",
+                onToggleComponentsPalette
+            );
+            ipcRenderer.removeListener(
                 "resetLayoutModels",
                 onResetLayoutModels
+            );
+
+            ipcRenderer.removeListener(
+                "findProjectComponent",
+                onFindProjectComponent
             );
 
             ipcRenderer.removeListener("reload-project", onReloadProject);
@@ -681,6 +774,10 @@ export class ProjectEditorTab implements IHomeTab {
             return this.projectStore.title;
         }
 
+        if (isScrapbookItemFilePath(this.filePath)) {
+            return getScrapbookItemTabTitle(this.filePath);
+        }
+
         if (this.filePath) {
             if (this.filePath.endsWith(".eez-project")) {
                 return path.basename(this.filePath, ".eez-project");
@@ -694,6 +791,10 @@ export class ProjectEditorTab implements IHomeTab {
     }
 
     get tooltipTitle() {
+        if (isScrapbookItemFilePath(this.filePath)) {
+            return this.titleStr;
+        }
+
         return this.filePath;
     }
 
@@ -719,10 +820,21 @@ export class ProjectEditorTab implements IHomeTab {
 
         if (!this._iconPromise) {
             this._iconPromise = (async () => {
-                const jsonStr = await fs.promises.readFile(
-                    this.filePath,
-                    "utf-8"
-                );
+                let jsonStr;
+                if (isScrapbookItemFilePath(this.filePath)) {
+                    try {
+                        jsonStr = getScrapbookItemEezProject(this.filePath);
+                    } catch (err) {
+                        console.error(err);
+                        return;
+                    }
+                } else {
+                    jsonStr = await fs.promises.readFile(
+                        this.filePath,
+                        "utf-8"
+                    );
+                }
+
                 const json = JSON.parse(jsonStr);
                 const projectType = json.settings.general.projectType;
                 const icon = getProjectIcon(
@@ -834,6 +946,12 @@ export class ProjectEditorTab implements IHomeTab {
             this.projectStore.runtime?.saveDebugInfo();
         }
     }
+
+    copyProjectPath() {
+        if (this.projectStore && this.projectStore.filePath) {
+            clipboard.writeText(this.projectStore.filePath);
+        }
+    }
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -901,6 +1019,8 @@ export class Tabs {
     }
 
     constructor() {
+        initProjectEditor(tabs, ProjectEditorTab);
+
         makeObservable(this, {
             tabs: observable,
             activeTab: observable,
@@ -1034,6 +1154,8 @@ export class Tabs {
         let tab;
 
         if (tabId == "extensions" || tabId == "settings") {
+            const { homeTabStore } =
+                require("home/home-tab") as typeof HomeTabModule;
             runInAction(() => (homeTabStore.activeTab = tabId));
             tab = this.findTab("home");
         } else {
@@ -1131,6 +1253,8 @@ export class Tabs {
         if (this.activeTab) {
             this.activeTab.active = true;
         }
+
+        historySessions.setShowDeleted(false);
     }
 
     viewDeletedHistory = false;
@@ -1146,11 +1270,15 @@ export class Tabs {
     }
 
     navigateToSessionsList() {
-        this.openTabById("history", true);
-        this.viewDeletedHistory = false;
-        const { showSessionsList } =
-            require("instrument/window/history/history-view") as typeof HistoryViewModule;
-        showSessionsList(this);
+        if (this.activeTab instanceof InstrumentTab) {
+            this.activeTab.showSessionsList();
+        } else {
+            this.openTabById("history", true);
+            this.viewDeletedHistory = false;
+            const { showSessionsList } =
+                require("instrument/window/history/history-view") as typeof HistoryViewModule;
+            showSessionsList(this);
+        }
     }
 
     mainHistoryView: HistoryViewComponent | undefined;
@@ -1178,8 +1306,8 @@ export class Tabs {
             tab =>
                 tab instanceof ProjectEditorTab &&
                 tab.filePath == filePath &&
-                tab.runMode == runMode
-        );
+                (tab.runMode ?? false) == (runMode ?? false)
+        ) as ProjectEditorTab | undefined;
     }
 
     reloadProject(projectStore: ProjectStore) {
@@ -1192,12 +1320,46 @@ export class Tabs {
             tab.reloadProject();
         }
     }
+
+    showNextTab() {
+        for (let i = 0; i < this.tabs.length; i++) {
+            if (this.tabs[i] == this.activeTab) {
+                if (i + 1 < this.tabs.length) {
+                    this.makeActive(this.tabs[i + 1]);
+                } else {
+                    this.makeActive(this.tabs[0]);
+                }
+                break;
+            }
+        }
+    }
+
+    showPreviousTab() {
+        for (let i = 0; i < this.tabs.length; i++) {
+            if (this.tabs[i] == this.activeTab) {
+                if (i - 1 >= 0) {
+                    this.makeActive(this.tabs[i - 1]);
+                } else {
+                    this.makeActive(this.tabs[this.tabs.length - 1]);
+                }
+                break;
+            }
+        }
+    }
 }
 
 export let tabs: Tabs;
 
 export function loadTabs() {
     tabs = new Tabs();
+
+    ipcRenderer.on("show-next-tab", async () => {
+        tabs.showNextTab();
+    });
+
+    ipcRenderer.on("show-previous-tab", async () => {
+        tabs.showPreviousTab();
+    });
 }
 
 export function openProject(filePath: string, runMode: boolean) {
@@ -1213,3 +1375,19 @@ export function openProject(filePath: string, runMode: boolean) {
         console.error(err);
     }
 }
+
+ipcRenderer.on("show-documentation-browser", async () => {
+    if (
+        tabs.activeTab instanceof ProjectEditorTab &&
+        tabs.activeTab.projectStore &&
+        tabs.activeTab.projectStore.runtime
+    ) {
+        return;
+    }
+
+    const { showDocumentationBrowser } = await import(
+        "home/documentation-browser"
+    );
+    await initProjectEditor(tabs, ProjectEditorTab);
+    showDocumentationBrowser();
+});

@@ -10,7 +10,6 @@ import type * as DlogWaveformModule from "instrument/window/waveform/dlog";
 
 import type { IHistoryItem, HistoryItem } from "instrument/window/history/item";
 
-import type * as SessionHistoryItemModule from "instrument/window/history/items/session";
 import type * as CreatedHistoryItemModule from "instrument/window/history/items/created";
 import type * as ConnectedHistoryItemModule from "instrument/window/history/items/connected";
 import type * as ConnectFailedHistoryItemModule from "instrument/window/history/items/connect-failed";
@@ -23,6 +22,9 @@ import type * as ListHistoryItemModule from "instrument/window/history/items/lis
 import type * as PlotterHistoryItemModule from "instrument/window/history/items/plotter";
 import type * as PlotlyHistoryItemModule from "instrument/window/history/items/plotly";
 import type * as ScriptHistoryItemModule from "instrument/window/history/items/script";
+import type * as TabulatorHistoryItemModule from "instrument/window/history/items/tabulator";
+import type * as MediaHistoryItemModule from "instrument/window/history/items/media";
+import type * as UnknownHistoryItemModule from "instrument/window/history/items/unknown";
 
 ////////////////////////////////////////////////////////////////////////////////
 
@@ -61,12 +63,6 @@ export function createHistoryItem(
     store: IStore,
     activityLogEntry: IActivityLogEntry
 ): HistoryItem {
-    if (activityLogEntry.type.startsWith("activity-log/session")) {
-        const { SessionHistoryItem } =
-            require("instrument/window/history/items/session") as typeof SessionHistoryItemModule;
-        return new SessionHistoryItem(store, activityLogEntry);
-    }
-
     if (
         activityLogEntry.type === "instrument/created" ||
         activityLogEntry.type === "instrument/deleted" ||
@@ -158,7 +154,21 @@ export function createHistoryItem(
         return new ScriptHistoryItem(store, activityLogEntry);
     }
 
-    throw "Unknown activity log entry";
+    if (activityLogEntry.type === "instrument/tabulator") {
+        const { TabulatorHistoryItem } =
+            require("instrument/window/history/items/tabulator") as typeof TabulatorHistoryItemModule;
+        return new TabulatorHistoryItem(store, activityLogEntry);
+    }
+
+    if (activityLogEntry.type === "activity-log/media") {
+        const { MediaHistoryItem } =
+            require("instrument/window/history/items/media") as typeof MediaHistoryItemModule;
+        return new MediaHistoryItem(store, activityLogEntry);
+    }
+
+    const { UnknownHistoryItem } =
+        require("instrument/window/history/items/unknown") as typeof UnknownHistoryItemModule;
+    return new UnknownHistoryItem(store, activityLogEntry);
 }
 
 export function updateHistoryItemClass(

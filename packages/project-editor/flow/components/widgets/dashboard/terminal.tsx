@@ -1,7 +1,7 @@
 import React from "react";
 import { Duplex, Readable } from "stream";
 
-import type { IDashboardComponentContext } from "eez-studio-types";
+import type { IDashboardComponentContext, ValueType } from "eez-studio-types";
 
 import {
     registerClass,
@@ -25,7 +25,9 @@ import { TERMINAL_WIDGET_ICON } from "project-editor/ui-components/icons";
 ////////////////////////////////////////////////////////////////////////////////
 
 class ExecutionState {
+    data: string = "";
     onData: ((value: string) => void) | undefined = undefined;
+    clear: (() => void) | undefined = undefined;
 }
 
 export class TerminalWidget extends Widget {
@@ -52,6 +54,18 @@ export class TerminalWidget extends Widget {
         execute: (context: IDashboardComponentContext) => {
             Widget.classInfo.execute!(context);
 
+            const clearTerminal = context.getInputValue("clear");
+            if (clearTerminal) {
+                context.clearInputValue("clear");
+
+                let executionState =
+                    context.getComponentExecutionState<ExecutionState>();
+                if (executionState && executionState.clear) {
+                    executionState.clear();
+                }
+                return;
+            }
+
             const data = context.evalProperty("data");
 
             if (typeof data === "string" && data.length > 0) {
@@ -64,6 +78,8 @@ export class TerminalWidget extends Widget {
 
                 if (executionState.onData) {
                     executionState.onData(data);
+                } else {
+                    executionState.data += data;
                 }
             } else if (data instanceof Readable || data instanceof Duplex) {
                 data.on("data", (chunk: Buffer) => {
@@ -76,11 +92,25 @@ export class TerminalWidget extends Widget {
 
                     if (executionState.onData) {
                         executionState.onData(chunk.toString());
+                    } else {
+                        executionState.data += chunk.toString();
                     }
                 });
             }
         }
     });
+
+    getInputs() {
+        return [
+            {
+                name: "clear",
+                type: "any" as ValueType,
+                isSequenceInput: false,
+                isOptionalInput: true
+            },
+            ...super.getInputs()
+        ];
+    }
 
     getOutputs(): ComponentOutput[] {
         return [
@@ -193,6 +223,13 @@ const TerminalElement = observer(
                     executionState.onData = data => {
                         this.terminal.write(data);
                     };
+                    executionState.clear = () => {
+                        this.terminal.clear();
+                    };
+                    if (executionState.data) {
+                        this.terminal.write(executionState.data);
+                        executionState.data = "";
+                    }
                 }
             }
         }

@@ -1,7 +1,6 @@
 import React from "react";
 import path from "path";
 import { observable, computed, makeObservable } from "mobx";
-import { zipObject, map } from "lodash";
 
 import { isValid, strToColor16 } from "eez-studio-shared/color";
 
@@ -30,7 +29,8 @@ import {
     propertyNotSetMessage,
     createObject,
     isEezObjectArray,
-    getAncestorOfType
+    getAncestorOfType,
+    getClassInfo
 } from "project-editor/store";
 import {
     isDashboardProject,
@@ -58,45 +58,14 @@ import { ProjectEditor } from "project-editor/project-editor-interface";
 
 import { MenuItem } from "@electron/remote";
 import type { ProjectEditorFeature } from "project-editor/store/features";
-import type { Widget } from "project-editor/flow/component";
+import {
+    makeExpressionProperty,
+    type Widget
+} from "project-editor/flow/component";
 import { checkExpression } from "project-editor/flow/expression";
 import type { IFlowContext } from "project-editor/flow/flow-interfaces";
 
-export type BorderRadiusSpec = {
-    topLeftX: number;
-    topLeftY: number;
-    topRightX: number;
-    topRightY: number;
-    bottomLeftX: number;
-    bottomLeftY: number;
-    bottomRightX: number;
-    bottomRightY: number;
-};
-
 ////////////////////////////////////////////////////////////////////////////////
-
-export function isWidgetParentOfStyle(object: IEezObject) {
-    while (true) {
-        if (object instanceof ProjectEditor.ComponentClass) {
-            return true;
-        }
-        if (!getParent(object)) {
-            return false;
-        }
-        object = getParent(object);
-    }
-}
-
-////////////////////////////////////////////////////////////////////////////////
-
-function openCssHelpPage(cssAttributeName: string) {
-    const { shell } = require("electron");
-    shell.openExternal(
-        `https://developer.mozilla.org/en-US/docs/Web/CSS/${
-            cssAttributeName != "css" ? cssAttributeName : ""
-        }`
-    );
-}
 
 const propertyMenu = (props: PropertyProps): Electron.MenuItem[] => {
     let menuItems: Electron.MenuItem[] = [];
@@ -152,6 +121,14 @@ const backgroundColorPropertyMenu = (
 
 ////////////////////////////////////////////////////////////////////////////////
 
+const conditionalStyleConditionProperty = makeExpressionProperty(
+    {
+        name: "condition",
+        type: PropertyType.MultilineText
+    },
+    "boolean"
+);
+
 export class ConditionalStyle extends EezObject {
     style: string;
     condition: string;
@@ -162,7 +139,8 @@ export class ConditionalStyle extends EezObject {
                 name: "style",
                 type: PropertyType.ObjectReference,
                 referencedObjectCollectionPath: "allStyles"
-            }
+            },
+            conditionalStyleConditionProperty
         ],
         check: (
             conditionalStyleItem: ConditionalStyle,
@@ -429,7 +407,6 @@ export const conditionalStylesProperty: PropertyInfo = {
     name: "conditionalStyles",
     type: PropertyType.Array,
     typeClass: ConditionalStyle,
-    arrayItemOrientation: "vertical",
     partOfNavigation: false,
     enumerable: false,
     defaultValue: [],
@@ -798,7 +775,6 @@ const blinkProperty: PropertyInfo = {
 const cssProperty: PropertyInfo = {
     name: "css",
     displayName: "Additional CSS",
-    propertyNameAbove: true,
     type: PropertyType.CSS,
     cssAttributeName: "css",
     nonInheritable: true,
@@ -806,10 +782,32 @@ const cssProperty: PropertyInfo = {
     disabled: isNotDashboardProject
 };
 
+export const dynamicCssProperty = makeExpressionProperty(
+    {
+        name: "dynamicCSS",
+        displayName: "Dynamic CSS",
+        type: PropertyType.MultilineText,
+        disabled: (object: IEezObject, propertyInfo: PropertyInfo) => {
+            if (isNotDashboardProject(object)) {
+                return true;
+            }
+            if (
+                !getAncestorOfType(
+                    object,
+                    ProjectEditor.ComponentClass.classInfo
+                )
+            ) {
+                return true;
+            }
+            return false;
+        }
+    },
+    "string"
+);
+
 const cssPreviewProperty: PropertyInfo = {
     name: "cssPreview",
     displayName: "CSS preview",
-    propertyNameAbove: true,
     type: PropertyType.CSS,
     disabled: isNotDashboardProject,
     readOnlyInPropertyGrid: true,
@@ -857,14 +855,15 @@ const properties = [
     boxShadowProperty,
     blinkProperty,
     cssProperty,
+    dynamicCssProperty,
     cssPreviewProperty,
     alwaysBuildProperty
 ];
 
-const propertiesMap: { [propertyName: string]: PropertyInfo } = zipObject(
-    map(properties, p => p.name),
-    map(properties, p => p)
-) as any;
+const propertiesMap: { [propertyName: string]: PropertyInfo } = {};
+for (const property of properties) {
+    propertiesMap[property.name] = property;
+}
 
 ////////////////////////////////////////////////////////////////////////////////
 
@@ -905,6 +904,7 @@ export class Style extends EezObject {
     blink?: boolean;
 
     css?: string;
+    dynamicCSS?: string;
 
     _transientId: number;
 
@@ -1043,7 +1043,8 @@ export class Style extends EezObject {
 
             cssDeclarations: computed,
             cssPreview: computed,
-            classNames: computed
+            classNames: computed,
+            dynamicCSS: observable
         });
     }
 
@@ -1177,7 +1178,10 @@ export class Style extends EezObject {
             function checkColor(propertyName: string) {
                 const color = (style as any)[propertyName];
                 if (color) {
-                    const colorValue = getThemedColor(projectStore, color);
+                    const colorValue = getThemedColor(
+                        projectStore,
+                        color
+                    ).colorValue;
                     if (!isValid(colorValue)) {
                         messages.push(
                             new Message(
@@ -1204,6 +1208,26 @@ export class Style extends EezObject {
                     !findStyle(projectStore.project, style.useStyle)
                 ) {
                     messages.push(propertyNotFoundMessage(style, "useStyle"));
+                }
+
+                if (style.dynamicCSS) {
+                    const widget = getAncestorOfType<Widget>(
+                        style,
+                        ProjectEditor.WidgetClass.classInfo
+                    );
+                    if (widget) {
+                        try {
+                            checkExpression(widget, style.dynamicCSS);
+                        } catch (err) {
+                            messages.push(
+                                new Message(
+                                    MessageType.ERROR,
+                                    `Invalid Dynamic CSS expression: ${err}`,
+                                    getChildOfObject(style, "dynamicCSS")
+                                )
+                            );
+                        }
+                    }
                 }
 
                 // TODO
@@ -1877,17 +1901,20 @@ export class Style extends EezObject {
                     ["font-style", this.fontStyle],
                     [
                         "color",
-                        this.color && getThemedColor(projectStore, this.color)
+                        this.color &&
+                            getThemedColor(projectStore, this.color).colorValue
                     ],
                     [
                         "background-color",
                         this.backgroundColor &&
                             getThemedColor(projectStore, this.backgroundColor)
+                                .colorValue
                     ],
                     [
                         "border-color",
                         this.borderColor &&
                             getThemedColor(projectStore, this.borderColor)
+                                .colorValue
                     ],
                     ["border-style", this.borderStyle],
                     ["box-shadow", this.boxShadow]
@@ -1900,6 +1927,7 @@ export class Style extends EezObject {
                         "color",
                         this.activeColor &&
                             getThemedColor(projectStore, this.activeColor)
+                                .colorValue
                     ],
                     [
                         "background-color",
@@ -1907,7 +1935,7 @@ export class Style extends EezObject {
                             getThemedColor(
                                 projectStore,
                                 this.activeBackgroundColor
-                            )
+                            ).colorValue
                     ]
                 ]
             },
@@ -1918,6 +1946,7 @@ export class Style extends EezObject {
                         "color",
                         this.focusColor &&
                             getThemedColor(projectStore, this.focusColor)
+                                .colorValue
                     ],
                     [
                         "background-color",
@@ -1925,7 +1954,7 @@ export class Style extends EezObject {
                             getThemedColor(
                                 projectStore,
                                 this.focusBackgroundColor
-                            )
+                            ).colorValue
                     ]
                 ]
             }
@@ -2161,8 +2190,7 @@ export class Style extends EezObject {
                             `${getKey(this)}.${
                                 conditionalStylesProperty.name
                             }[${index}].${
-                                ProjectEditor.conditionalStyleConditionProperty
-                                    .name
+                                conditionalStyleConditionProperty.name
                             }`
                         ) ?? false;
 
@@ -2180,6 +2208,37 @@ export class Style extends EezObject {
             }
         }
         return classNames;
+    }
+
+    getDynamicCSSClassName(flowContext: IFlowContext) {
+        if (this.dynamicCSS) {
+            const widget = getAncestorOfType<Widget>(
+                this,
+                ProjectEditor.WidgetClass.classInfo
+            );
+            if (widget) {
+                let value = ProjectEditor.evalProperty(
+                    flowContext,
+                    widget,
+                    `${getKey(this)}.${dynamicCssProperty.name}`
+                );
+
+                if (!value) {
+                    return undefined;
+                }
+
+                const { css } =
+                    require("@emotion/css") as typeof import("@emotion/css");
+
+                return css`
+                    &&&&& {
+                        ${value}
+                    }
+                `;
+            }
+        }
+
+        return undefined;
     }
 
     render() {
@@ -2210,6 +2269,27 @@ export class Style extends EezObject {
 registerClass("Style", Style);
 
 ////////////////////////////////////////////////////////////////////////////////
+
+function isWidgetParentOfStyle(object: IEezObject) {
+    while (true) {
+        if (object instanceof ProjectEditor.ComponentClass) {
+            return true;
+        }
+        if (!getParent(object)) {
+            return false;
+        }
+        object = getParent(object);
+    }
+}
+
+function openCssHelpPage(cssAttributeName: string) {
+    const { shell } = require("electron");
+    shell.openExternal(
+        `https://developer.mozilla.org/en-US/docs/Web/CSS/${
+            cssAttributeName != "css" ? cssAttributeName : ""
+        }`
+    );
+}
 
 function getInheritedValue(
     styleObject: Style,
@@ -2244,7 +2324,10 @@ function getInheritedValue(
                     propertyName === "focusBackgroundColor" ||
                     propertyName === "borderColor")
             ) {
-                value = getThemedColor(getProjectStore(styleObject), value);
+                value = getThemedColor(
+                    getProjectStore(styleObject),
+                    value
+                ).colorValue;
             }
 
             return {
@@ -2290,6 +2373,45 @@ export function getStyleProperty(
     );
 
     return inheritedValue?.value;
+}
+
+export function getAdditionalStyleFlowProperties(widget: Widget) {
+    const additionalProperties: PropertyInfo[] = [];
+
+    const classInfo = getClassInfo(widget);
+
+    for (const propertyInfo of classInfo.properties) {
+        if (
+            propertyInfo.type == PropertyType.Object &&
+            propertyInfo.typeClass == Style
+        ) {
+            const style = (widget as any)[propertyInfo.name] as Style;
+
+            if (style.conditionalStyles) {
+                for (
+                    let index = 0;
+                    index < style.conditionalStyles.length;
+                    index++
+                ) {
+                    additionalProperties.push(
+                        Object.assign({}, conditionalStyleConditionProperty, {
+                            name: `${propertyInfo.name}.${conditionalStylesProperty.name}[${index}].${conditionalStyleConditionProperty.name}`
+                        })
+                    );
+                }
+            }
+
+            if (style.dynamicCSS) {
+                additionalProperties.push(
+                    Object.assign({}, dynamicCssProperty, {
+                        name: `${propertyInfo.name}.${dynamicCssProperty.name}`
+                    })
+                );
+            }
+        }
+    }
+
+    return additionalProperties;
 }
 
 ////////////////////////////////////////////////////////////////////////////////

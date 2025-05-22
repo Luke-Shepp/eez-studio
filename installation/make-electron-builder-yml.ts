@@ -21,9 +21,17 @@ async function getExtraResource() {
         to: "lv_img_conv_9/" + file
     }));
 
+    let eezframeworkAmalgamation = (
+        await fs.promises.readdir("./resources/eez-framework-amalgamation")
+    ).map(file => ({
+        from: "./resources/eez-framework-amalgamation/" + file,
+        to: "eez-framework-amalgamation/" + file
+    }));
+
     return [
         ...extraResources,
         ...lvImgConv9,
+        ...eezframeworkAmalgamation,
         ...[
             {
                 from: "./LICENSE.TXT",
@@ -53,6 +61,7 @@ let files = [
     "!**/node_modules/*.d.ts",
     "!**/node_modules/.bin",
     "!**/*.js.map",
+    "!**/*.mjs.map",
     "!**/*.css.map",
     "!**/*.ilk",
     "!**/*.lib",
@@ -75,7 +84,8 @@ let files = [
     "node_modules/mapbox-gl/dist/mapbox-gl.js",
     "!node_modules/xterm/src/**",
     "!node_modules/koffi/src",
-    "!node_modules/koffi/doc"
+    "!node_modules/koffi/doc",
+    "!node_modules/tabulator-tables/src"
     //"!node_modules/koffi/build/koffi/**"
 ];
 

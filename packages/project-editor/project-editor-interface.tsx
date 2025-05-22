@@ -15,7 +15,8 @@ import type {
     getFlow,
     getProject,
     Project,
-    ImportDirective
+    ImportDirective,
+    BuildFile
 } from "project-editor/project/project";
 import type { Page } from "project-editor/features/page/page";
 import type {
@@ -26,7 +27,8 @@ import type {
     CustomInput,
     CustomOutput,
     createActionComponentClass,
-    makeExpressionProperty
+    makeExpressionProperty,
+    checkProperty
 } from "project-editor/flow/component";
 import type {
     Glyph,
@@ -40,7 +42,11 @@ import type {
     ScpiSubsystem
 } from "project-editor/features/scpi/scpi";
 import type { getObjectVariableTypeFromType } from "project-editor/features/variable/value-type";
-import type { getBitmapData } from "project-editor/features/bitmap/bitmap";
+import type {
+    Bitmap,
+    getBitmapData
+} from "project-editor/features/bitmap/bitmap";
+import type { Font } from "project-editor/features/font/font";
 import type {
     migrateProjectVersion,
     migrateProjectType
@@ -59,7 +65,8 @@ import type { browseGlyph } from "project-editor/features/font/FontEditor";
 import type { Variable } from "project-editor/features/variable/variable";
 import type {
     OutputActionComponent,
-    CallActionActionComponent
+    CallActionActionComponent,
+    CommentActionComponent
 } from "project-editor/flow/components/actions";
 import type {
     ContainerWidget,
@@ -71,8 +78,16 @@ import type { ArrayProperty } from "project-editor/ui-components/PropertyGrid/Ar
 import type { EmbeddedPropertyGrid } from "project-editor/ui-components/PropertyGrid/EmbeddedPropertyGrid";
 import type {
     LVGLWidget,
+    LVGLScreenWidget,
+    LVGLContainerWidget,
     LVGLPanelWidget,
-    LVGLUserWidgetWidget
+    LVGLUserWidgetWidget,
+    LVGLTabWidget,
+    LVGLRollerWidget,
+    LVGLButtonMatrixWidget,
+    LVGLLedWidget,
+    LVGLTabviewWidget,
+    LVGLDropdownWidget
 } from "project-editor/lvgl/widgets";
 import type { LVGLStyle } from "project-editor/lvgl/style";
 import type { Property } from "project-editor/ui-components/PropertyGrid/Property";
@@ -87,8 +102,15 @@ import type {
 
 import type { Style } from "project-editor/features/style/style";
 import type { evalProperty } from "project-editor/flow/helper";
-import type { PropertyInfo } from "project-editor/core/object";
 import type { migrateLvglVersion } from "project-editor/lvgl/migrate";
+import type { FlowTabState } from "project-editor/flow/flow-tab-state";
+import type { Color } from "project-editor/features/style/theme";
+import type { UserProperty } from "project-editor/flow/user-property";
+import type { LVGLActionComponent } from "project-editor/lvgl/actions";
+import type { FlowEditor } from "project-editor/flow/editor/editor";
+import type { newComponentMenuItem } from "project-editor/flow/editor/ComponentsPalette";
+
+import type { LVGLPageEditorRuntime } from "project-editor/lvgl/page-runtime";
 
 export interface IProjectEditor {
     homeTabs?: Tabs;
@@ -111,6 +133,7 @@ export interface IProjectEditor {
     ActionClass: typeof Action;
     ComponentClass: typeof Component;
     ActionComponentClass: typeof ActionComponent;
+    CommentActionComponentClass: typeof CommentActionComponent;
     WidgetClass: typeof Widget;
     ConnectionLineClass: typeof ConnectionLine;
     UserWidgetWidgetClass: typeof UserWidgetWidget;
@@ -120,14 +143,28 @@ export interface IProjectEditor {
     OutputActionComponentClass: typeof OutputActionComponent;
     CallActionActionComponentClass: typeof CallActionActionComponent;
     VariableClass: typeof Variable;
+    UserPropertyClass: typeof UserProperty;
     GlyphClass: typeof Glyph;
     ScpiCommandClass: typeof ScpiCommand;
     ScpiSubsystemClass: typeof ScpiSubsystem;
     StyleClass: typeof Style;
+    BitmapClass: typeof Bitmap;
+    FontClass: typeof Font;
+    ColorClass: typeof Color;
     LVGLWidgetClass: typeof LVGLWidget;
+    LVGLScreenWidgetClass: typeof LVGLScreenWidget;
+    LVGLContainerWidgetClass: typeof LVGLContainerWidget;
     LVGLPanelWidgetClass: typeof LVGLPanelWidget;
     LVGLUserWidgetWidgetClass: typeof LVGLUserWidgetWidget;
+    LVGLTabviewWidgetClass: typeof LVGLTabviewWidget;
+    LVGLTabWidgetClass: typeof LVGLTabWidget;
+    LVGLDropdownWidgetClass: typeof LVGLDropdownWidget;
+    LVGLRollerWidgetClass: typeof LVGLRollerWidget;
+    LVGLButtonMatrixWidgetClass: typeof LVGLButtonMatrixWidget;
+    LVGLLedWidgetClass: typeof LVGLLedWidget;
     LVGLStyleClass: typeof LVGLStyle;
+    LVGLActionComponentClass: typeof LVGLActionComponent;
+    LVGLPageEditorRuntimeClass: typeof LVGLPageEditorRuntime;
     getProject: typeof getProject;
     getProjectStore: typeof getProjectStore;
     getFlow: typeof getFlow;
@@ -159,7 +196,11 @@ export interface IProjectEditor {
     createActionComponentClass: typeof createActionComponentClass;
     makeExpressionProperty: typeof makeExpressionProperty;
     evalProperty: typeof evalProperty;
-    conditionalStyleConditionProperty: PropertyInfo;
+    checkProperty: typeof checkProperty;
+    FlowTabStateClass: typeof FlowTabState;
+    BuildFileClass: typeof BuildFile;
+    FlowEditorClass: typeof FlowEditor;
+    newComponentMenuItem: typeof newComponentMenuItem;
 }
 
 export const ProjectEditor: IProjectEditor = {} as any;

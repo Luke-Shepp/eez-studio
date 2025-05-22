@@ -86,7 +86,6 @@ export interface IFlow {}
 
 export interface IComponentState {
     inputsData: Map<string, any>;
-    unreadInputsData: Set<string>;
     asyncState: boolean;
     executionState: any;
 }
@@ -164,6 +163,16 @@ export interface IDocument {
         connectionOutput: string,
         targetObjectId: string,
         connectionInput: string
+    ): void;
+    connectToNewTarget(
+        sourceObjectId: string,
+        connectionOutput: string,
+        atPoint: Point
+    ): void;
+    connectToNewSource(
+        targetObjectId: string,
+        connectionInput: string,
+        atPoint: Point
     ): void;
 }
 

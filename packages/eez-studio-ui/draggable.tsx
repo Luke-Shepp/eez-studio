@@ -1,4 +1,5 @@
 import { closestBySelector } from "eez-studio-shared/dom";
+import { IPointerEvent } from "project-editor/flow/editor/mouse-handler";
 
 export const DRAGGABLE_OVERLAY_ELEMENT_ID = "eez-draggable-overlay-element";
 
@@ -22,6 +23,7 @@ export class Draggable {
     params: any;
     savedBodyUserSelect: string | null = null;
     capturedPointerId: number = 0;
+    lastDragMoveEvent: PointerEvent | undefined;
 
     constructor(private config: DraggableConfig) {}
 
@@ -49,15 +51,6 @@ export class Draggable {
             return;
         }
 
-        // put in focus first parent with tabindex attribute
-        const parentWithTabindex = closestBySelector(
-            this.element,
-            "[tabindex]"
-        );
-        if (parentWithTabindex) {
-            parentWithTabindex.focus();
-        }
-
         this.finishDragging(undefined, true);
 
         const el1 = closestBySelector(
@@ -68,8 +61,18 @@ export class Draggable {
             e.target,
             ".eez-flow-editor-not-capture-pointers"
         );
+
         if (el1 && (!el2 || el2.contains(el1))) {
             return;
+        }
+
+        // put in focus first parent with tabindex attribute
+        const parentWithTabindex = closestBySelector(
+            this.element,
+            "[tabindex]"
+        );
+        if (parentWithTabindex) {
+            parentWithTabindex.focus();
         }
 
         e.preventDefault();
@@ -107,6 +110,7 @@ export class Draggable {
         this.element.setPointerCapture(e.pointerId);
 
         this.dragging = true;
+        this.lastDragMoveEvent = undefined;
 
         this.xDragStart = e.clientX;
         this.yDragStart = e.clientY;
@@ -125,6 +129,7 @@ export class Draggable {
     onPointerMove = (e: PointerEvent) => {
         if (this.dragging) {
             if (this.config.onDragMove) {
+                this.lastDragMoveEvent = e;
                 this.config.onDragMove(
                     e,
                     e.clientX - this.xDragStart,
@@ -154,11 +159,30 @@ export class Draggable {
     };
 
     onKeyDown = (e: KeyboardEvent) => {
-        if (e.keyCode == 27 /* ESC */) {
+        if (e.key == "Escape") {
             e.preventDefault();
             e.stopPropagation();
 
             this.finishDragging(undefined, true);
+        } else if (this.dragging) {
+            if (this.config.onDragMove && this.lastDragMoveEvent) {
+                let moveEvent: IPointerEvent = {
+                    clientX: this.lastDragMoveEvent.clientX,
+                    clientY: this.lastDragMoveEvent.clientY,
+                    movementX: this.lastDragMoveEvent.movementX,
+                    movementY: this.lastDragMoveEvent.movementY,
+                    ctrlKey: e.ctrlKey,
+                    shiftKey: e.shiftKey,
+                    timeStamp: e.timeStamp
+                };
+
+                this.config.onDragMove(
+                    moveEvent as PointerEvent,
+                    moveEvent.clientX - this.xDragStart,
+                    moveEvent.clientY - this.yDragStart,
+                    this.params
+                );
+            }
         }
     };
 

@@ -33,7 +33,8 @@ import {
     FLOW_VALUE_TYPE_POINTER,
     FLOW_VALUE_TYPE_ERROR,
     FLOW_VALUE_TYPE_WIDGET,
-    FLOW_VALUE_TYPE_JSON
+    FLOW_VALUE_TYPE_JSON,
+    FLOW_VALUE_TYPE_EVENT
 } from "project-editor/build/value-types";
 import type {
     ObjectOrArrayValueWithType,
@@ -205,7 +206,9 @@ export function createWasmArrayValue(
             typeof value == "number" ||
             typeof value == "boolean" ||
             typeof value == "string" ||
-            value instanceof Date
+            value instanceof Date ||
+            value instanceof Buffer ||
+            value instanceof Uint8Array
         ) {
             valuePtr = createWasmValue(WasmFlowRuntime, value);
         } else {
@@ -224,7 +227,7 @@ export function createWasmArrayValue(
 
 export function createWasmValue(
     WasmFlowRuntime: IWasmFlowRuntime,
-    value: undefined | null | number | boolean | string | ArrayValue,
+    value: undefined | null | number | boolean | string | ArrayValue | Object,
     valueTypeIndex?: number
 ) {
     if (value === undefined) {
@@ -233,6 +236,10 @@ export function createWasmValue(
 
     if (value === null) {
         return WasmFlowRuntime._createNullValue();
+    }
+
+    if (value instanceof Error) {
+        return WasmFlowRuntime._createErrorValue();
     }
 
     if (typeof value == "number") {
@@ -290,7 +297,7 @@ export function createWasmValue(
         return createWasmArrayValue(WasmFlowRuntime, arrayValue);
     }
 
-    if (value.valueTypeIndex != undefined) {
+    if ("valueTypeIndex" in value) {
         return createWasmArrayValue(WasmFlowRuntime, value);
     }
 
@@ -444,6 +451,11 @@ export function getValue(
             ),
             valueType: "json"
         };
+    } else if (type == FLOW_VALUE_TYPE_EVENT) {
+        return {
+            value: WasmFlowRuntime.HEAPU32[offset >> 2],
+            valueType: "widget"
+        };
     }
 
     console.error("Unknown type from WASM: ", type);
@@ -561,6 +573,8 @@ function getJSObjectID(
             jsObject
         });
         wasmModuleJSObjects.jsObjectIDs.set(jsObject, jsObjectID);
+
+        //console.log("no. of JS objects", wasmModuleJSObjects.jsObjects.size);
     }
     return jsObjectID;
 }

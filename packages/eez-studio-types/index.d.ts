@@ -13,6 +13,7 @@ export type BasicType =
     | "stream"
     | "widget"
     | "json"
+    | "event"
     | "any";
 
 export type OtherBasicType =
@@ -151,18 +152,6 @@ export type LogItemType =
     | "info"
     | "debug";
 
-export interface IComponentFlowState {
-    getComponentExecutionState<T>(): T | undefined;
-    setComponentExecutionState<T>(executionState: T): void;
-    evalExpression(expression: string): any;
-    evalTemplateLiteral(expression: string): any;
-    assignValue(assignableExpression: string, value: any): any;
-    propagateValue(output: string, value: any): void;
-    throwError(err: string): void;
-    log(type: LogItemType, message: string): void;
-    dispose: (() => void) | undefined;
-}
-
 ////////////////////////////////////////////////////////////////////////////////
 
 // must be serializable
@@ -203,7 +192,7 @@ export interface IObjectVariableType {
         newValue?: IObjectVariableValue
     ): void;
 
-    getValue?(variableValue: any): IObjectVariableValue | null;
+    getValue(variableValue: any): IObjectVariableValue | null;
 
     valueFieldDescriptions: IObjectVariableValueFieldDescription[];
 }
@@ -314,7 +303,7 @@ export interface IActionComponentDefinition {
     bodyPropertyCallback?: (...props: string[]) => React.ReactNode;
 
     inputs: IComponentInput[];
-    outputs: IComponentOutput[];
+    outputs: IComponentOutput[] | ((...props: string[]) => IComponentOutput[]);
 
     properties: IComponentProperty[];
 
@@ -354,8 +343,67 @@ export interface WorkerToRenderMessage {
 
     freeArrayValue?: ObjectOrArrayValueWithType;
 
+    getObjectVariableMemberValue?: {
+        arrayValuePtr: number;
+        memberIndex: number;
+    };
+
+    getBitmapAsDataURL?: {
+        name: string;
+    };
+
+    setDashboardColorTheme?: {
+        themeName: string;
+    };
+
+    getLvglScreenByName?: {
+        name: string;
+    };
+
+    getLvglObjectByName?: {
+        name: string;
+    };
+
+    getLvglGroupByName?: {
+        name: string;
+    };
+
+    getLvglStyleByName?: {
+        name: string;
+    };
+
     getLvglImageByName?: {
         name: string;
+    };
+
+    lvglObjAddStyle?: {
+        targetObj: number;
+        styleIndex: number;
+    };
+
+    lvglObjRemoveStyle?: {
+        targetObj: number;
+        styleIndex: number;
+    };
+
+    lvglSetColorTheme?: {
+        themeName: string;
+    };
+
+    lvglCreateScreen?: {
+        screenIndex: number;
+    };
+
+    lvglDeleteScreen?: {
+        screenIndex: number;
+    };
+
+    lvglScreenTick?: any;
+
+    lvglOnEventHandler?: {
+        obj: number;
+        eventCode: number;
+        event: number;
     };
 }
 
@@ -466,6 +514,8 @@ interface AssetsMap {
     displayWidth: number;
     displayHeight: number;
     bitmaps: string[];
+    lvglWidgetIndexes: { [identifier: string]: number };
+    lvglWidgetGeneratedIdentifiers: { [objId: string]: string };
 }
 
 export interface ScpiCommand {
@@ -507,17 +557,19 @@ export interface IWasmFlowRuntime {
 
     readSettings: (key: string) => any;
     writeSettings: (key: string, value: any) => any;
+    hasWidgetHandle: (flowStateIndex: number, componentIndex: number) => boolean;
     getWidgetHandle: (flowStateIndex: number, componentIndex: number) => number;
     getWidgetHandleInfo: (widgetHandle: number) => {
         flowStateIndex: number, componentIndex: number
     } | undefined;
 
     // eez framework API
-    _init(wasmModuleId: number, debuggerMessageSubsciptionFilter: number, assets: number, assetsSize: number, displayWidth: number, displayHeight: number, timeZone: number): void;
+    _init(wasmModuleId: number, debuggerMessageSubsciptionFilter: number, assets: number, assetsSize: number, displayWidth: number, displayHeight: number, darkTheme: boolean, timeZone: number, screensLifetimeSupport: boolean): void;
     _mainLoop(): boolean;
     _getSyncedBuffer(): number;
-    _onMouseWheelEvent(wheelDeltaY: number, wheelClicked: number): void;
+    _onMouseWheelEvent(wheelDeltaY: number, pressed: number): void;
     _onPointerEvent(x: number, y: number, pressed: number): void;
+    _onKeyPressed(key: number): void;
     _onMessageFromDebugger(messageData: number, messageDataSize: number): void;
 
     // eez flow API for Dashboard projects
@@ -533,6 +585,7 @@ export interface IWasmFlowRuntime {
     _createDateValue(value: number): number;
     _createBlobValue(bufferPtr: number, bufferLen: number): number;
     _createJsonValue(value: number): number;
+    _createErrorValue(): number;
 
     _arrayValueSetElementValue(arrayValuePtr: number, elementIndex: number, value: number): void;
 
@@ -594,75 +647,48 @@ export interface IWasmFlowRuntime {
 
     _onMqttEvent(handle: number, eventType: number, eventDataPtr1: number, eventDataPtr2: number): void;
 
+    _flowCleanup() : void;
+
     // LVGL API
-    _lvglCreateContainer(parentObj: number, index: number, x: number, y: number, w: number, h: number): number;
-    _lvglCreateLabel(parentObj: number, index: number, x: number, y: number, w: number, h: number, text: number, long_mode: number, recolor: number): number;
-    _lvglCreateButton(parentObj: number, index: number, x: number, y: number, w: number, h: number): number;
-    _lvglCreatePanel(parentObj: number, index: number, x: number, y: number, w: number, h: number): number;
+    _lvglCreateScreen(parentObj: number, index: number, x: number, y: number, w: number, h: number): number;
     _lvglCreateUserWidget(parentObj: number, index: number, x: number, y: number, w: number, h: number): number;
-    _lvglCreateImage(parentObj: number, index: number, x: number, y: number, w: number, h: number, img_src: number, pivotX: number, pivotY: number, zoom: number, angle: number): number;
-    _lvglCreateSlider(parentObj: number, index: number, x: number, y: number, w: number, h: number, min: number, max: number, mode: number, value: number, value_left: number): number;
-    _lvglCreateRoller(parentObj: number, index: number, x: number, y: number, w: number, h: number, options: number, selected: number, mode: number): number;
-    _lvglCreateSwitch(parentObj: number, index: number, x: number, y: number, w: number, h: number): number;
-    _lvglCreateBar(parentObj: number, index: number, x: number, y: number, w: number, h: number, min: number, max: number, mode: number, value: number, value_left: number): number;
-    _lvglCreateDropdown(parentObj: number, index: number, x: number, y: number, w: number, h: number, options: number, selected: number): number;
-    _lvglCreateArc(parentObj: number, index: number, x: number, y: number, w: number, h: number, range_min: number, range_max: number, value: number, bg_start_angle: number, bg_end_angle: number, mode: number, rotation: number): number;
-    _lvglCreateSpinner(parentObj: number, index: number, x: number, y: number, w: number, h: number): number;
-    _lvglCreateCheckbox(parentObj: number, index: number, x: number, y: number, w: number, h: number, text: number): number;
-    _lvglCreateTextarea(parentObj: number, index: number, x: number, y: number, w: number, h: number, text: number, placeholder: number, one_line_mode: boolean, password_mode: boolean, accepted_characters: number, max_text_length: number): number;
-    _lvglCreateCalendar(parentObj: number, index: number, x: number, y: number, w: number, h: number, today_year: number, today_month: number, today_day: number, showed_year: number, showed_month: number): number;
-    _lvglCreateColorwheel(parentObj: number, index: number, x: number, y: number, w: number, h: number, mode: number, fixed_mode: boolean): number;
-    _lvglCreateImgbutton(parentObj: number, index: number, x: number, y: number, w: number, h: number): number;
-    _lvglCreateKeyboard(parentObj: number, index: number, x: number, y: number, w: number, h: number, mode: number): number;
-    _lvglCreateChart(parentObj: number, index: number, x: number, y: number, w: number, h: number): number;
-    _lvglCreateMeter(parentObj: number, index: number, x: number, y: number, w: number, h: number): number;
-    _lvglCreateScale(parentObj: number, index: number, x: number, y: number, w: number, h: number, scaleMode:number, minorRange: number, majorRange: number, totalTickCount: number, majorTickEvery: number, showLabels: boolean): number;
+
     _lvglScreenLoad(page_index: number, obj: number): void;
     _lvglDeleteObject(obj: number): void;
+    _lvglDeleteObjectIndex(index: number): void;
+    _lvglDeletePageFlowState(index: number): void;
     _lvglObjAddFlag(obj: number, f: number): void;
     _lvglObjClearFlag(obj: number, f: number): void;
+    _lvglObjHasFlag(obj: number, f: number): boolean;
     _lvglObjAddState(obj: number, s: number): void;
     _lvglObjClearState(obj: number, s: number): void;
-    _lvglObjGetStylePropColor(obj: number, part: number, prop: number): number;
-    _lvglObjGetStylePropNum(obj: number, part: number, prop: number): number;
+    _lvglObjGetStylePropColor(obj: number, part: number, state: number, prop: number): number;
+    _lvglObjGetStylePropNum(obj: number, part: number, state: number, prop: number): number;
     _lvglObjSetLocalStylePropColor(obj: number, prop: number, color: number, selector: number): void;
     _lvglObjSetLocalStylePropNum(obj: number, prop: number, num: number, selector: number): void;
     _lvglObjSetLocalStylePropPtr(obj: number, prop: number, ptr: number, selector: number): void;
-    _lvglObjGetStylePropBuiltInFont(obj: number, part: number, prop: number): number;
-    _lvglObjGetStylePropFontAddr(obj: number, part: number, prop: number): number;
+    _lvglObjGetStylePropBuiltInFont(obj: number, part: number, state: number, prop: number): number;
+    _lvglObjGetStylePropFontAddr(obj: number, part: number, state: number, prop: number): number;
     _lvglObjSetLocalStylePropBuiltInFont(obj: number, prop: number, font_index: number, selector: number): void;
+
+    _lvglStyleCreate(): number;
+    _lvglStyleSetPropColor(obj: number, prop: number, color: number): void;
+    _lvglSetStylePropBuiltInFont(obj: number, prop: number, font_index: number): void
+    _lvglSetStylePropPtr(obj: number, prop: number, ptr: number): void;
+    _lvglSetStylePropNum(obj: number, prop: number, num: number): void;
+    _lvglStyleDelete(obj: number): void;
+
+    _lvglObjAddStyle(obj: number, style: number, selector: number): void;
+    _lvglObjRemoveStyle(obj: number, style: number, selector: number): void;
+
     _lvglGetObjRelX(obj: number): number;
     _lvglGetObjRelY(obj: number): number;
     _lvglGetObjWidth(obj: number): number;
     _lvglGetObjHeight(obj: number): number;
-    _lvglLoadFont(font_file_path: number): number;
+    _lvglLoadFont(font_file_path: number, fallback_user_font: number, fallback_builtin_font: number): number;
     _lvglFreeFont(font_ptr: number): void;
-    _lvglAddObjectFlowCallback(obj: number, filter: number, flow_state: number, component_index: number, output_or_property_index: number): void;
-    _lvglSetImageSrc(parentObj: number, img_src: number, pivotX: number, pivotY: number, zoom: number, angle: number): void;
-    _lvglSetImgbuttonImageSrc(obj: number, statE: number, img_src: number): void;
-    _lvglSetKeyboardTextarea(obj: number, textarea: number): void;
-    _lvglMeterAddScale(obj: number,
-        minorTickCount: number, minorTickLineWidth: number, minorTickLength: number, minorTickColor: number,
-        nthMajor: number, majorTickWidth: number, majorTickLength: number, majorTickColor: number, labelGap: number,
-        scaleMin: number, scaleMax: number, scaleAngleRange: number, scaleRotation: number): number;
-    _lvglMeterAddIndicatorNeedleImg(obj: number, scale: number, image: number, pivotX: number, pivotY: number, value: number): number;
-    _lvglMeterAddIndicatorNeedleLine(obj: number, scale: number, width: number, color: number, radiusModifier: number, value: number): number;
-    _lvglMeterAddIndicatorScaleLines(obj: number, scale: number, colorStart: number, colorEnd: number, local: boolean, widthModifier: number, startValue: number, endValue: number): number;
-    _lvglMeterAddIndicatorArc(obj: number, scale: number, width: number, color: number, radiusModifier: number, startValue: number, endValue: number): number;
-    _lvglUpdateMeterIndicatorValue(obj: number, indicator: number, flow_state: number, component_index: number, property_index: number): void;
-    _lvglUpdateMeterIndicatorStartValue(obj: number, indicator: number, flow_state: number, component_index: number, property_index: number): void;
-    _lvglUpdateMeterIndicatorEndValue(obj: number, indicator: number, flow_state: number, component_index: number, property_index: number): void;
-    _lvglUpdateLabelText(obj: number, flow_state: number, component_index: number, property_index: number): void;
-    _lvglUpdateRollerOptions(obj: number, flow_state: number, component_index: number, property_index: number, mode: number): void;
-    _lvglUpdateRollerSelected(obj: number, flow_state: number, component_index: number, property_index: number): void;
-    _lvglUpdateDropdownOptions(obj: number, flow_state: number, component_index: number, property_index: number): void;
-    _lvglUpdateDropdownSelected(obj: number, flow_state: number, component_index: number, property_index: number): void;
-    _lvglUpdateSliderValue(obj: number, flow_state: number, component_index: number, property_index: number): void;
-    _lvglUpdateSliderValueLeft(obj: number, flow_state: number, component_index: number, property_index: number): void;
-    _lvglUpdateBarValue(obj: number, flow_state: number, component_index: number, property_index: number): void;
-    _lvglUpdateBarValueStart(obj: number, flow_state: number, component_index: number, property_index: number): void;
-    _lvglUpdateArcValue(obj: number, flow_state: number, component_index: number, property_index: number): void;
-    _lvglUpdateTextareaText(obj: number, flow_state: number, component_index: number, property_index: number): void;
+    _lvglAddObjectFlowCallback(obj: number, filter: number, flow_state: number, component_index: number, output_or_property_index: number, userDataValuePtr: number): void;
+    
     _lvglUpdateCheckedState(obj: number, flow_state: number, component_index: number, property_index: number): void;
     _lvglUpdateDisabledState(obj: number, flow_state: number, component_index: number, property_index: number): void;
     _lvglUpdateHiddenFlag(obj: number, flow_state: number, component_index: number, property_index: number): void;
@@ -684,6 +710,29 @@ export interface IWasmFlowRuntime {
     _lvglSetTimelinePosition(timelinePosition: number): void;
     _lvglClearTimeline(): void;
     _lvglGetFlowState(flowState: number, userWidgetComponentIndexOrPageIndex: number): number;
+
+    _lvglSetScrollBarMode(obj: number, mode: number);
+    _lvglSetScrollDir(obj: number, dir: number);
+    _lvglSetScrollSnapX(obj: number, align: number);
+    _lvglSetScrollSnapY(obj: number, align: number);
+
+    _lvglLineSetPoints(obj: number, point_values: number, point_num: number);
+    _lvglScrollTo(obj: number, x: number, y: number, anim_en: boolean);
+    _lvglGetScrollX(obj: number): number;
+    _lvglGetScrollY(obj: number): number;
+
+    _lvglCreateGroup(): number;
+    _lvglSetEncoderGroup(groupObj: number): void;
+    _lvglSetKeyboardGroup(groupObj: number): void;
+    _lvglAddScreenLoadedEventHandler(screenObj: number): void;
+    _lvglGroupAddObject(screenObj: number, groupObj: number, obj: number): void;
+    _lvglGroupRemoveObjectsForScreen(screenObj: number): void;
+
+    _lvglObjInvalidate(obj: number);
+
+    _lvglDeleteScreenOnUnload(screenIndex: number);
+
+    _lvglAddEventHandler(obj: number, eventCode: number): void;
 }
 
 export interface IDashboardComponentContext {
@@ -729,7 +778,11 @@ export interface IDashboardComponentContext {
         value: any
     ) => void;
 
-    assignProperty(inputName: string, value: any): void;
+    assignProperty(
+        inputName: string,
+        value: any,
+        iterators: number[] | undefined
+    ): void;
 
     getOutputType: (outputName: string) => IType | undefined;
 

@@ -1,284 +1,325 @@
 import {
     observable,
-    action,
-    runInAction,
-    autorun,
     makeObservable,
-    IReactionDisposer
+    computed,
+    values,
+    runInAction,
+    autorun
 } from "mobx";
 
-import { dbQuery } from "eez-studio-shared/db-query";
-import { beginTransaction, commitTransaction } from "eez-studio-shared/store";
-
-import { error } from "eez-studio-ui/notification";
-
 import {
-    IActivityLogEntry,
-    activityLogStore,
-    log,
-    logUpdate,
-    activeSession
-} from "instrument/window/history/activity-log";
+    beginTransaction,
+    commitTransaction,
+    createStore,
+    createStoreObjectsCollection,
+    types
+} from "eez-studio-shared/store";
+import { db } from "eez-studio-shared/db";
 
-import type { History } from "instrument/window/history/history";
-import { CONF_ITEMS_BLOCK_SIZE } from "instrument/window/history/CONF_ITEMS_BLOCK_SIZE";
-import {
-    createHistoryItem,
-    rowsToHistoryItems
-} from "instrument/window/history/item-factory";
-import { moveToTopOfHistory } from "instrument/window/history/history-view";
+import * as notification from "eez-studio-ui/notification";
+import { guid } from "eez-studio-shared/guid";
 
-import type { SessionHistoryItem } from "instrument/window/history/items/session";
-import { showEditSessionNameDialog } from "instrument/window/history/session/list-view";
+////////////////////////////////////////////////////////////////////////////////
 
-export interface ISession {
-    selected: boolean;
+export const SESSION_FREE_ID = "free";
+
+const SESSION_FREE: IHistorySession = observable({
+    id: SESSION_FREE_ID,
+    uuid: "e06929d6-b97e-4d65-bcb0-0c9f00058dd6",
+    name: "Free mode",
+    folder: "",
+    isActive: false,
+    deleted: false
+});
+
+////////////////////////////////////////////////////////////////////////////////
+
+export interface IHistorySession {
     id: string;
-    activityLogEntry: IActivityLogEntry;
+    uuid: string;
+    name: string;
+    folder: string;
+    isActive: boolean;
+    deleted: boolean;
 }
 
-export class HistorySessions {
-    sessions: ISession[] = [];
-    selectedSession: ISession | undefined;
-    activeSession: SessionHistoryItem | undefined;
-
-    autorunDisposer: IReactionDisposer;
-
-    constructor(public history: History) {
-        makeObservable(this, {
-            sessions: observable,
-            selectedSession: observable,
-            activeSession: observable,
-            load: action,
-            selectSession: action.bound,
-            closeActiveSession: action.bound
-        });
-
-        this.autorunDisposer = autorun(
-            () => {
-                let newActiveSession: SessionHistoryItem | undefined;
-
-                if (activeSession.id) {
-                    const activityLogEntry = activityLogStore.findById(
-                        activeSession.id
-                    );
-                    if (activityLogEntry) {
-                        newActiveSession = createHistoryItem(
-                            this.history.options.store,
-                            activityLogEntry
-                        ) as SessionHistoryItem;
-                    }
-                } else {
-                    newActiveSession = undefined;
-                }
-
-                const newMessage = activeSession.message;
-
-                runInAction(() => {
-                    this.activeSession = newActiveSession;
-                    if (this.activeSession && newMessage) {
-                        this.activeSession.message = newMessage;
-                    }
-                });
-            },
-            {
-                delay: 100
-            }
+export const historySessionsStore = createStore({
+    storeName: "history/sessions",
+    versionTables: [],
+    versions: [
+        // version 1
+        `CREATE TABLE "history/sessions"(
+            id INTEGER PRIMARY KEY NOT NULL UNIQUE,
+            name TEXT NOT NULL,
+            folder TEXT NOT NULL,
+            isActive BOOLEAN NOT NULL,
+            deleted BOOLEAN NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS versions(tableName TEXT PRIMARY KEY, version INT NOT NULL);
+        INSERT INTO versions(tableName, version) VALUES ('history/sessions', 1)`,
+
+        // version 2
+        `ALTER TABLE "history/sessions" ADD COLUMN uuid TEXT;
+        UPDATE versions SET version = 2 WHERE tableName = 'history/sessions';`
+    ],
+    properties: {
+        id: types.id,
+        uuid: types.string,
+        name: types.string,
+        folder: types.string,
+        isActive: types.boolean,
+        deleted: types.boolean
     }
+});
 
-    async load() {
-        const rows = await dbQuery(
-            "HistorySessions load",
-            `SELECT
-                    id,
-                    ${activityLogStore.nonTransientAndNonLazyProperties}
-                FROM
-                    "${activityLogStore.storeName}" AS T3
-                WHERE
-                    type = 'activity-log/session-start' AND
-                    (
-                        json_extract(message, '$.sessionCloseId') IS NULL OR
-                        EXISTS(
-                            SELECT * FROM ${activityLogStore.storeName} AS T1
-                            WHERE ${this.history.oidWhereClause} AND T1.sid = T3.id
-                        )
-                    )
-                ORDER BY
-                    date`
-        ).all();
+const sessionsCollection = createStoreObjectsCollection<IHistorySession>();
+historySessionsStore.watch(sessionsCollection);
+export const sessions = sessionsCollection.objects;
 
-        runInAction(() => {
-            this.sessions = rowsToHistoryItems(activityLogStore, rows).map(
-                activityLogEntry => ({
-                    selected: false,
-                    id: activityLogEntry.id,
-                    activityLogEntry
-                })
-            );
+const deletedSessionsCollection =
+    createStoreObjectsCollection<IHistorySession>();
+historySessionsStore.watch(deletedSessionsCollection, {
+    deletedOption: "only"
+});
+export const deletedSessions = deletedSessionsCollection.objects;
+
+export function getActiveSession() {
+    return values(sessions).find(session => session.isActive);
+}
+
+////////////////////////////////////////////////////////////////////////////////
+
+class HistorySessions {
+    _selectedSession: IHistorySession | undefined = undefined;
+    showDeleted = false;
+
+    constructor() {
+        makeObservable(this, {
+            _selectedSession: observable,
+            showDeleted: observable,
+            sessions: computed,
+            deletedSessions: computed,
+            selectedSession: computed,
+            activeSession: computed
+        });
+
+        autorun(() => {
+            if (this.showDeleted && this.deletedSessions.length == 0) {
+                this.setShowDeleted(false);
+            }
         });
     }
 
-    async selectSession(selectedSession: ISession | undefined) {
-        if (this.selectedSession) {
-            this.selectedSession.selected = false;
-        }
-        this.selectedSession = selectedSession;
-        if (this.selectedSession) {
-            this.selectedSession.selected = true;
-        }
-
-        if (selectedSession) {
-            const rows = await dbQuery(
-                "HistorySessions selectSession",
-                `SELECT
-                        id,
-                        ${activityLogStore.nonTransientAndNonLazyProperties}
-                    FROM
-                        (
-                            SELECT
-                                *
-                            FROM
-                            ${activityLogStore.storeName} as T1
-                            WHERE
-                                ${
-                                    this.history.oidWhereClause
-                                } AND date >= ? ${this.history.getFilter()}
-                            ORDER BY
-                                date
-                        )
-                    LIMIT ?`
-            ).all(
-                new Date(selectedSession.activityLogEntry.date).getTime(),
-                CONF_ITEMS_BLOCK_SIZE
-            );
-
-            this.history.displayRows(rows);
-
-            moveToTopOfHistory(
-                this.history.appStore.navigationStore.mainHistoryView
-            );
-        }
+    get sessions() {
+        const list = [...values(sessions)];
+        list.sort((a, b) => a.name.localeCompare(b.name));
+        list.unshift(SESSION_FREE);
+        return list;
     }
 
-    onActivityLogEntryCreated(activityLogEntry: IActivityLogEntry) {
-        if (activityLogEntry.type === "activity-log/session-start") {
-            let i: number;
-            for (i = 0; i < this.sessions.length; i++) {
-                if (
-                    activityLogEntry.id === this.sessions[i].activityLogEntry.id
-                ) {
-                    return;
-                }
-                if (
-                    activityLogEntry.date <
-                    this.sessions[i].activityLogEntry.date
-                ) {
-                    break;
-                }
-            }
-
-            runInAction(() => {
-                this.sessions.splice(i, 0, {
-                    selected: false,
-                    id: activityLogEntry.id,
-                    activityLogEntry
-                });
-            });
-        }
+    get deletedSessions() {
+        const list = [...values(deletedSessions)];
+        list.sort((a, b) => a.name.localeCompare(b.name));
+        return list;
     }
 
-    onActivityLogEntryUpdated(activityLogEntry: IActivityLogEntry) {
-        if (activityLogEntry.message !== undefined) {
-            for (let i = 0; i < this.sessions.length; i++) {
-                if (this.sessions[i].id === activityLogEntry.id) {
-                    runInAction(() => {
-                        this.sessions[i].activityLogEntry.message =
-                            activityLogEntry.message;
-                    });
-                    break;
-                }
-            }
-        }
+    get selectedSession() {
+        return this._selectedSession || this.activeSession;
     }
 
-    onActivityLogEntryRemoved(activityLogEntry: IActivityLogEntry) {
-        if (activityLogEntry.type === "activity-log/session-start") {
-            for (let i = 0; i < this.sessions.length; i++) {
-                if (this.sessions[i].id === activityLogEntry.id) {
-                    runInAction(() => {
-                        this.sessions.splice(i, 1);
-                    });
-                    break;
-                }
-            }
-        }
+    get activeSession() {
+        return getActiveSession() ?? SESSION_FREE;
     }
 
-    startNewSession = () => {
-        if (!this.activeSession) {
-            showEditSessionNameDialog("", name => {
-                if (!this.activeSession) {
-                    beginTransaction("New session");
-                    log(
-                        activityLogStore,
-                        {
-                            oid: "0",
-                            type: "activity-log/session-start",
-                            message: JSON.stringify({
-                                sessionName: name
-                            })
-                        },
-                        {
-                            undoable: false
-                        }
-                    );
-                    commitTransaction();
-                } else {
-                    error(
-                        "Failed to start new session because there is an active session"
-                    );
-                }
-            });
+    activateSession(sessionId: string | undefined) {
+        if (sessionId === this.activeSession.id) {
+            return;
         }
-    };
 
-    closeActiveSession() {
-        if (this.activeSession) {
-            beginTransaction("Close session");
+        if (
+            this.activeSession.id !== SESSION_FREE_ID ||
+            (sessionId && sessionId !== SESSION_FREE_ID)
+        ) {
+            beginTransaction("Activate session");
 
-            const sessionCloseId = log(
-                activityLogStore,
-                {
-                    oid: "0",
-                    type: "activity-log/session-close"
-                },
-                {
-                    undoable: false
-                }
-            );
-
-            let message: any = JSON.parse(this.activeSession.message);
-            message.sessionCloseId = sessionCloseId;
-            logUpdate(
-                this.history.options.store,
-                {
+            if (this.activeSession.id !== SESSION_FREE_ID) {
+                historySessionsStore.updateObject({
                     id: this.activeSession.id,
-                    oid: this.activeSession.oid,
-                    message: JSON.stringify(message)
-                },
-                {
-                    undoable: false
-                }
-            );
+                    isActive: false
+                });
+            }
+
+            if (sessionId && sessionId !== SESSION_FREE_ID) {
+                historySessionsStore.updateObject({
+                    id: sessionId,
+                    isActive: true
+                });
+            }
 
             commitTransaction();
         }
     }
 
-    onTerminate() {
-        if (this.autorunDisposer) {
-            this.autorunDisposer();
+    selectSession(session: IHistorySession | undefined) {
+        runInAction(() => {
+            this._selectedSession = session;
+        });
+    }
+
+    setShowDeleted = (showDeleted: boolean) => {
+        if (showDeleted == this.showDeleted) {
+            return;
         }
+
+        if (showDeleted) {
+            runInAction(() => {
+                this.showDeleted = true;
+                this._selectedSession = this.deletedSessions[0];
+            });
+        } else {
+            runInAction(() => {
+                this.showDeleted = false;
+                this._selectedSession = undefined;
+            });
+        }
+    };
+
+    createNewSession = (name: string) => {
+        beginTransaction("Create session");
+
+        const sessionId = historySessionsStore.createObject({
+            uuid: guid(),
+            name,
+            folder: "",
+            isActive: false
+        });
+
+        commitTransaction();
+
+        this.activateSession(sessionId);
+    };
+
+    updateSessionName(session: IHistorySession, name: string) {
+        if (session.id === SESSION_FREE_ID) {
+            return;
+        }
+
+        beginTransaction("Update session name");
+
+        historySessionsStore.updateObject({
+            id: session.id,
+            name
+        });
+
+        commitTransaction();
+    }
+
+    deleteSession(session: IHistorySession) {
+        if (session.id === SESSION_FREE_ID) {
+            return;
+        }
+
+        beginTransaction("Delete session");
+
+        historySessionsStore.deleteObject(session);
+
+        commitTransaction();
+    }
+
+    restoreSession = (session: IHistorySession) => {
+        historySessionsStore.undeleteObject(session);
+
+        //this.activateSession(session.id);
+
+        runInAction(() => {
+            this._selectedSession = undefined;
+        });
+    };
+
+    async deleteForeverSession(session: IHistorySession) {
+        const { activityLogStore, logDelete } = await import(
+            "instrument/window/history/activity-log"
+        );
+
+        let progressToastId = notification.info(
+            "Deleting session history items ...",
+            {
+                autoClose: false,
+                closeButton: false,
+                closeOnClick: false,
+                hideProgressBar: false,
+                progressStyle: {
+                    transition: "none"
+                }
+            }
+        );
+
+        await new Promise(resolve => setTimeout(resolve, 100));
+
+        const logs = db
+            .prepare(`SELECT * FROM activityLog WHERE sid=${session.id}`)
+            .all() as any;
+        for (let i = 0; i < logs.length; i++) {
+            const log = logs[i];
+            logDelete(activityLogStore, log, {
+                deletePermanently: true
+            });
+
+            const progress = (i + 1) / logs.length;
+
+            notification.update(progressToastId, {
+                progress
+            });
+
+            await new Promise(resolve => setTimeout(resolve, 0));
+        }
+
+        notification.dismiss(progressToastId);
+
+        historySessionsStore.deleteObject(session, {
+            deletePermanently: true
+        });
+
+        // select next session
+        let i = this.deletedSessions.findIndex(
+            deletedSession => deletedSession.id == session.id
+        );
+        if (i == -1) {
+            i = 0;
+        } else {
+            if (i + 1 < this.deletedSessions.length) {
+                i++;
+            } else {
+                i--;
+            }
+        }
+        runInAction(() => {
+            this._selectedSession = this.deletedSessions[i];
+        });
+    }
+
+    getLastActivity(session: IHistorySession) {
+        let row;
+        if (session.id == SESSION_FREE_ID) {
+            row = db
+                .prepare(
+                    "SELECT date FROM activityLog ORDER BY date DESC LIMIT 1"
+                )
+                .get() as any;
+        } else {
+            row = db
+                .prepare(
+                    "SELECT date FROM activityLog WHERE sid = ? ORDER BY date DESC LIMIT 1"
+                )
+                .get([session.id]) as any;
+        }
+
+        if (!row) {
+            return null;
+        }
+
+        return new Date(Number(row.date));
     }
 }
+
+export const historySessions = new HistorySessions();

@@ -55,8 +55,9 @@ import {
 } from "project-editor/project/project";
 import { ButtonAction } from "eez-studio-ui/action";
 import type { CommandsProtocolType } from "eez-studio-shared/extensions/extension";
+import { compareVersions } from "eez-studio-shared/util";
 
-// from https://envox.hr/gitea
+// from https://envox.eu/gitea
 interface TemplateProject {
     clone_url: string;
     html_url: string;
@@ -89,6 +90,9 @@ export interface ExampleProject {
     displayHeight?: number;
     targetPlatform?: string;
     targetPlatformLink?: string;
+    author?: string;
+    authorLink?: string;
+    minStudioVersion?: string;
     resourceFiles: string[];
 }
 
@@ -116,6 +120,9 @@ interface IProjectType {
         | string
         | { "8.3": string; "9.0": string }
         | { SCPI: string; PROPRIETARY: string };
+
+    author?: string;
+    authorLink?: string;
 }
 
 const SAVED_OPTIONS_VERSION = 12;
@@ -375,7 +382,7 @@ class WizardModel {
 
     async fetchTemplateProjects() {
         const result = await fetch(
-            "https://envox.hr/gitea/api/v1/repos/search?q=eez-flow-template&topic=true"
+            "https://envox.eu/gitea/api/v1/repos/search?q=eez-flow-template&topic=true"
         );
         const data = await result.json();
         const templateProjects = data.data.map(
@@ -500,8 +507,20 @@ class WizardModel {
         const _newExamples: IProjectType[] = [];
         map.set("_newExamples", _newExamples);
 
+        const packageJSON: {
+            version: string;
+        } = require("../../../../package.json");
+
         const examples = examplesCatalog.catalog
             .slice()
+            .filter(
+                example =>
+                    !example.minStudioVersion ||
+                    compareVersions(
+                        packageJSON.version,
+                        example.minStudioVersion
+                    ) >= 0
+            )
             .sort((a, b) => stringCompare(a.projectName, b.projectName));
 
         examples.forEach(example => {
@@ -529,7 +548,9 @@ class WizardModel {
                 displayHeight: example.displayHeight,
                 targetPlatform: example.targetPlatform,
                 targetPlatformLink: example.targetPlatformLink,
-                resourceFiles: example.resourceFiles
+                resourceFiles: example.resourceFiles,
+                author: example.author,
+                authorLink: example.authorLink
             };
 
             if (!this.searchFilter(projectType)) {
@@ -706,8 +727,8 @@ class WizardModel {
                 projectName: "LVGL",
                 description: "Start your new LVGL project development here.",
                 projectFileUrl: {
-                    "8.3": "https://raw.githubusercontent.com/eez-open/eez-project-templates/master/templates/LVGL-8.3.eez-project",
-                    "9.0": "https://raw.githubusercontent.com/eez-open/eez-project-templates/master/templates/LVGL-9.0.eez-project"
+                    "8.3": "https://raw.githubusercontent.com/eez-open/eez-project-templates/master/templates/v0.23.0/LVGL-8.3.eez-project",
+                    "9.0": "https://raw.githubusercontent.com/eez-open/eez-project-templates/master/templates/v0.23.0/LVGL-9.0.eez-project"
                 }
             },
             {
@@ -718,8 +739,8 @@ class WizardModel {
                 description:
                     "Start your new LVGL with EEZ Flow project development here.",
                 projectFileUrl: {
-                    "8.3": "https://raw.githubusercontent.com/eez-open/eez-project-templates/master/templates/LVGL%20with%20EEZ%20Flow-8.3.eez-project",
-                    "9.0": "https://raw.githubusercontent.com/eez-open/eez-project-templates/master/templates/LVGL%20with%20EEZ%20Flow-9.0.eez-project"
+                    "8.3": "https://raw.githubusercontent.com/eez-open/eez-project-templates/master/templates/v0.23.0/LVGL%20with%20EEZ%20Flow-8.3.eez-project",
+                    "9.0": "https://raw.githubusercontent.com/eez-open/eez-project-templates/master/templates/v0.23.0/LVGL%20with%20EEZ%20Flow-9.0.eez-project"
                 }
             },
             {
@@ -854,7 +875,7 @@ class WizardModel {
                     id: "_templates",
                     label: (
                         <Count
-                            label="From envox.hr/gitea"
+                            label="From envox.eu/gitea"
                             count={this.templateProjectTypes.length}
                             attention={false}
                         ></Count>
@@ -1264,15 +1285,25 @@ class WizardModel {
                         );
                     };
 
-                    await simpleGit({ progress: onGitProgress }).clone(
-                        this.gitCloneUrl!,
-                        projectDirPath,
-                        this.gitInit && !this.isSelectedExampleWithGitRepository
-                            ? {}
-                            : {
-                                  "--recurse-submodules": null
-                              }
-                    );
+                    try {
+                        await simpleGit({ progress: onGitProgress }).clone(
+                            this.gitCloneUrl!,
+                            projectDirPath,
+                            this.gitInit &&
+                                !this.isSelectedExampleWithGitRepository
+                                ? {}
+                                : {
+                                      "--recurse-submodules": null
+                                  }
+                        );
+                    } catch (err) {
+                        await fs.promises.rm(projectDirPath, {
+                            recursive: true,
+                            force: true
+                        });
+
+                        throw err;
+                    }
 
                     if (!this.isSelectedExampleWithGitRepository) {
                         await fs.promises.rm(projectDirPath + "/.git", {
@@ -1356,32 +1387,70 @@ class WizardModel {
                             await git.init();
 
                             for (const submodule of submodules) {
-                                runInAction(
-                                    () =>
-                                        (this.progress = `Adding submodule ${submodule.name} ...`)
-                                );
+                                const NUM_RETRIES = 3;
 
-                                await fs.promises.rm(
-                                    projectDirPath + "/" + submodule.path,
-                                    {
-                                        recursive: true,
-                                        force: true
-                                    }
-                                );
+                                for (let i = 0; i <= NUM_RETRIES; i++) {
+                                    const message = `Adding submodule ${
+                                        submodule.name
+                                    } ${
+                                        i > 0
+                                            ? `retry ${i} of ${NUM_RETRIES}`
+                                            : ""
+                                    } ...`;
 
-                                if (submodule.branch) {
-                                    await git.subModule([
-                                        "add",
-                                        "-b",
-                                        submodule.branch,
-                                        submodule.repository,
-                                        submodule.path
-                                    ]);
-                                } else {
-                                    await git.submoduleAdd(
-                                        submodule.repository,
-                                        submodule.path
+                                    runInAction(
+                                        () => (this.progress = message)
                                     );
+
+                                    await fs.promises.rm(
+                                        projectDirPath + "/" + submodule.path,
+                                        {
+                                            recursive: true,
+                                            force: true
+                                        }
+                                    );
+
+                                    try {
+                                        if (submodule.branch) {
+                                            await git.subModule(
+                                                [
+                                                    "add",
+                                                    "-b",
+                                                    submodule.branch,
+                                                    submodule.repository,
+                                                    submodule.path
+                                                ],
+                                                (err, data) => {
+                                                    console.log(err, data);
+                                                }
+                                            );
+                                        } else {
+                                            await git.submoduleAdd(
+                                                submodule.repository,
+                                                submodule.path,
+                                                (err, data) => {
+                                                    console.log(err, data);
+                                                }
+                                            );
+                                        }
+                                    } catch (err) {
+                                        if (i == NUM_RETRIES) {
+                                            await fs.promises.rm(
+                                                projectDirPath,
+                                                {
+                                                    recursive: true,
+                                                    force: true
+                                                }
+                                            );
+
+                                            throw err;
+                                        }
+
+                                        console.error(err);
+                                        continue;
+                                    }
+
+                                    break;
                                 }
                             }
 
@@ -1955,6 +2024,26 @@ const ProjectTypeComponent = observer(
                             </div>
                         )}
                         <div className="EezStudio_NewProjectWizard_ProjectType_Details_Description">
+                            {projectType.author && (
+                                <div>
+                                    Created :{" "}
+                                    {projectType.authorLink ? (
+                                        <a
+                                            href="#"
+                                            onClick={event => {
+                                                event.preventDefault();
+                                                openLink(
+                                                    projectType.authorLink!
+                                                );
+                                            }}
+                                        >
+                                            {projectType.author}
+                                        </a>
+                                    ) : (
+                                        projectType.author
+                                    )}
+                                </div>
+                            )}
                             {projectType.description}
                         </div>
 
@@ -1975,8 +2064,8 @@ const ProjectTypeComponent = observer(
                                           (projectType.id == "LVGL" ||
                                               projectType.id ==
                                                   "LVGL with EEZ Flow")
-                                            ? "8.3 | 9.0"
-                                            : "8.3"
+                                            ? "8.x | 9.x"
+                                            : "8.x"
                                         : undefined
                             }}
                         />
@@ -2036,6 +2125,12 @@ const ProjectProperties = observer(
             }
         };
 
+        onKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
+            if (event.key == "Enter") {
+                this.onCreateProject();
+            }
+        };
+
         render() {
             const { wizardModel } = this.props;
 
@@ -2076,6 +2171,7 @@ const ProjectProperties = observer(
                                         (value: string | undefined) =>
                                             (wizardModel.name = value)
                                     )}
+                                    onKeyDown={this.onKeyDown}
                                 />
                                 {wizardModel.nameError && (
                                     <div className="form-text text-danger">
@@ -2108,8 +2204,8 @@ const ProjectProperties = observer(
                                             )}
                                             value={wizardModel.lvglVersion}
                                         >
-                                            <option value="8.3">8.3</option>
-                                            <option value="9.0">9.0</option>
+                                            <option value="8.3">8.x</option>
+                                            <option value="9.0">9.x</option>
                                         </select>
                                     </div>
                                 )}
@@ -2638,6 +2734,7 @@ class NameInput extends React.Component<{
     id?: string;
     value: string | undefined;
     onChange: (value: string | undefined) => void;
+    onKeyDown: (event: React.KeyboardEvent<HTMLInputElement>) => void;
 }> {
     render() {
         return (
@@ -2647,7 +2744,7 @@ class NameInput extends React.Component<{
                 className="form-control"
                 value={this.props.value || ""}
                 onChange={event => this.props.onChange(event.target.value)}
-                spellCheck={false}
+                onKeyDown={this.props.onKeyDown}
             />
         );
     }
@@ -2659,7 +2756,7 @@ class DirectoryBrowserInput extends React.Component<{
     onChange: (value: string | undefined) => void;
 }> {
     onSelect = async () => {
-        const result = await dialog.showOpenDialog({
+        const result = await dialog.showOpenDialog(getCurrentWindow(), {
             properties: ["openDirectory"]
         });
 
@@ -2677,7 +2774,6 @@ class DirectoryBrowserInput extends React.Component<{
                     className="form-control"
                     value={this.props.value || ""}
                     onChange={event => this.props.onChange(event.target.value)}
-                    spellCheck={false}
                 />
                 <>
                     <button
@@ -2699,7 +2795,7 @@ class FileBrowserInput extends React.Component<{
     onChange: (value: string | undefined) => void;
 }> {
     onSelect = async () => {
-        const result = await dialog.showOpenDialog({
+        const result = await dialog.showOpenDialog(getCurrentWindow(), {
             properties: ["openFile"],
             filters: [
                 { name: "EEZ Project", extensions: ["eez-project"] },
@@ -2721,7 +2817,6 @@ class FileBrowserInput extends React.Component<{
                     className="form-control"
                     value={this.props.value || ""}
                     onChange={event => this.props.onChange(event.target.value)}
-                    spellCheck={false}
                 />
                 <>
                     <button

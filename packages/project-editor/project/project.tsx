@@ -65,7 +65,7 @@ import { Readme } from "project-editor/features/readme";
 import { Changes } from "project-editor/features/changes";
 import { validators } from "eez-studio-shared/validation";
 import { createProjectTypeTraits } from "./project-type-traits";
-import type { LVGLStyles } from "project-editor/lvgl/style";
+import type { LVGLStyle, LVGLStyles } from "project-editor/lvgl/style";
 import { Assets } from "project-editor/project/assets";
 import { getProject } from "project-editor/project/helper";
 import { ImportDirectiveCustomUI } from "project-editor/project/ui/AssetsUsage";
@@ -78,6 +78,8 @@ export { ProjectType } from "project-editor/core/object";
 
 import { isArray } from "eez-studio-shared/util";
 import type { CommandsProtocolType } from "eez-studio-shared/extensions/extension";
+import type { LVGLGroups } from "project-editor/lvgl/groups";
+import { settingsController } from "home/settings";
 
 export * from "project-editor/project/assets";
 export * from "project-editor/project/helper";
@@ -206,8 +208,26 @@ export class BuildFile extends EezObject {
             }
         ],
         newItem: async (parent: IEezObject) => {
+            const result = await showGenericDialog({
+                dialogDefinition: {
+                    title: "New File",
+                    fields: [
+                        {
+                            name: "fileName",
+                            type: "string",
+                            validators: [
+                                validators.required,
+                                validators.filePath,
+                                validators.unique({}, parent)
+                            ]
+                        }
+                    ]
+                },
+                values: {}
+            });
+
             const buildFileProperties: Partial<BuildFile> = {
-                fileName: "file",
+                fileName: result.values.fileName,
                 template: ""
             };
 
@@ -251,7 +271,16 @@ export class Build extends EezObject {
     configurations: BuildConfiguration[];
     files: BuildFile[];
     destinationFolder?: string;
+    separateFolderForImagesAndFonts?: boolean;
     lvglInclude: string;
+    screensLifetimeSupport: boolean;
+    generateSourceCodeForEezFramework: boolean;
+    compressFlowDefinition: boolean;
+    executionQueueSize: number;
+    expressionEvaluatorStackSize: number;
+    imageExportMode: "source" | "binary";
+    fontExportMode: "source" | "binary";
+    fileSystemPath: string;
 
     static classInfo: ClassInfo = {
         label: () => "Build",
@@ -277,16 +306,148 @@ export class Build extends EezObject {
                 type: PropertyType.RelativeFolder
             },
             {
+                name: "separateFolderForImagesAndFonts",
+                displayName: "Store image and font files in a separate folder",
+                checkboxStyleSwitch: true,
+                type: PropertyType.Boolean,
+                disabled: isNotLVGLProject
+            },
+            {
+                name: "imageExportMode",
+                type: PropertyType.Enum,
+                enumItems: [
+                    {
+                        id: "source",
+                        label: "Source code"
+                    },
+                    {
+                        id: "binary",
+                        label: "Binary"
+                    }
+                ],
+                enumDisallowUndefined: true,
+                disabled: (object: Build) => isNotLVGLProject(object)
+            },
+            {
+                name: "fontExportMode",
+                type: PropertyType.Enum,
+                enumItems: [
+                    {
+                        id: "source",
+                        label: "Source code"
+                    },
+                    {
+                        id: "binary",
+                        label: "Binary"
+                    }
+                ],
+                enumDisallowUndefined: true,
+                disabled: (object: Build) => isNotLVGLProject(object)
+            },
+            {
+                name: "fileSystemPath",
+                type: PropertyType.String,
+                disabled: (object: Build) =>
+                    isNotLVGLProject(object) ||
+                    (object.imageExportMode == "source" &&
+                        object.fontExportMode == "source")
+            },
+            {
                 name: "lvglInclude",
                 displayName: "LVGL include",
                 type: PropertyType.String,
                 disabled: isNotLVGLProject
+            },
+            {
+                name: "screensLifetimeSupport",
+                checkboxStyleSwitch: true,
+                type: PropertyType.Boolean,
+                disabled: isNotLVGLProject
+            },
+            {
+                name: "generateSourceCodeForEezFramework",
+                displayName:
+                    "Generate source code for EEZ Flow engine (eez-framework)",
+                type: PropertyType.Boolean,
+                checkboxStyleSwitch: true,
+                disabled: object =>
+                    isNotLVGLProject(object) ||
+                    !getProject(object).projectTypeTraits.hasFlowSupport
+            },
+            {
+                name: "compressFlowDefinition",
+                type: PropertyType.Boolean,
+                checkboxStyleSwitch: true,
+                disabled: (object: Build) =>
+                    isNotLVGLProject(object) ||
+                    !getProject(object).projectTypeTraits.hasFlowSupport ||
+                    !object.generateSourceCodeForEezFramework
+            },
+            {
+                name: "executionQueueSize",
+                type: PropertyType.Number,
+                disabled: (object: Build) =>
+                    isNotLVGLProject(object) ||
+                    !getProject(object).projectTypeTraits.hasFlowSupport ||
+                    !object.generateSourceCodeForEezFramework
+            },
+            {
+                name: "expressionEvaluatorStackSize",
+                type: PropertyType.Number,
+                disabled: (object: Build) =>
+                    isNotLVGLProject(object) ||
+                    !getProject(object).projectTypeTraits.hasFlowSupport ||
+                    !object.generateSourceCodeForEezFramework
             }
         ],
 
         beforeLoadHook: (object: Build, jsObject: Partial<Build>) => {
             if (!jsObject.lvglInclude) {
                 jsObject.lvglInclude = "lvgl/lvgl.h";
+            }
+
+            if (jsObject.generateSourceCodeForEezFramework == undefined) {
+                jsObject.generateSourceCodeForEezFramework = false;
+            }
+
+            if (jsObject.compressFlowDefinition == undefined) {
+                jsObject.compressFlowDefinition = false;
+            }
+
+            if (jsObject.executionQueueSize == undefined) {
+                jsObject.executionQueueSize = 1000;
+            }
+
+            if (jsObject.expressionEvaluatorStackSize == undefined) {
+                jsObject.expressionEvaluatorStackSize = 20;
+            }
+
+            if (jsObject.separateFolderForImagesAndFonts == undefined) {
+                jsObject.separateFolderForImagesAndFonts = false;
+            }
+
+            if (jsObject.screensLifetimeSupport == undefined) {
+                jsObject.screensLifetimeSupport = false;
+            }
+
+            if ((jsObject as any).fontsAreStoredInFilesystem === true) {
+                jsObject.fontExportMode = "binary";
+            }
+
+            if ((jsObject as any).fontsFilesystemPath != undefined) {
+                jsObject.fileSystemPath = (jsObject as any).fontsFilesystemPath;
+            }
+
+            if (jsObject.imageExportMode == undefined) {
+                jsObject.imageExportMode = "source";
+            }
+
+            if (jsObject.fontExportMode == undefined) {
+                jsObject.fontExportMode = "source";
+            }
+
+            if (jsObject.fileSystemPath == undefined) {
+                jsObject.fileSystemPath = "";
             }
         },
 
@@ -313,7 +474,16 @@ export class Build extends EezObject {
             configurations: observable,
             files: observable,
             destinationFolder: observable,
-            lvglInclude: observable
+            separateFolderForImagesAndFonts: observable,
+            imageExportMode: observable,
+            fontExportMode: observable,
+            fileSystemPath: observable,
+            lvglInclude: observable,
+            screensLifetimeSupport: observable,
+            generateSourceCodeForEezFramework: observable,
+            compressFlowDefinition: observable,
+            executionQueueSize: observable,
+            expressionEvaluatorStackSize: observable
         });
     }
 }
@@ -354,6 +524,7 @@ export class ImportDirective extends EezObject {
             }
         ],
         listLabel: (importDirective: ImportDirective, collapsed: boolean) => {
+            if (!collapsed) return "";
             if (importDirective.importAs) {
                 return `"${importDirective.projectFilePath}" As ${importDirective.importAs}`;
             }
@@ -456,7 +627,6 @@ export class ExtensionDirective extends EezObject {
             {
                 name: "extensionName",
                 type: PropertyType.String,
-                disableSpellcheck: true,
 
                 onSelect: async (
                     object: IEezObject,
@@ -485,6 +655,7 @@ export class ExtensionDirective extends EezObject {
             }
         ],
         listLabel: (object: ExtensionDirective, collapsed: boolean) => {
+            if (!collapsed) return "";
             return object.extensionName;
         },
         defaultValue: {},
@@ -546,6 +717,7 @@ export class ResourceFile extends EezObject {
             }
         ],
         listLabel: (resourceFile: ResourceFile, collapsed: boolean) => {
+            if (!collapsed) return "";
             return resourceFile.filePath;
         },
         defaultValue: {},
@@ -611,6 +783,8 @@ export class General extends EezObject {
     displayWidth: number;
     displayHeight: number;
     circularDisplay: boolean;
+    displayBorderRadius: number;
+    darkTheme: boolean;
     colorFormat: string;
     //css: string;
 
@@ -622,7 +796,13 @@ export class General extends EezObject {
     keywords: string;
     targetPlatform: string;
     targetPlatformLink: string;
+    author: string;
+    authorLink: string;
+    minStudioVersion: string;
     resourceFiles: ResourceFile[];
+
+    hiddenWidgetLines: "visible" | "dimmed" | "hidden";
+    dimmedLinesOpacity: number;
 
     static classInfo: ClassInfo = {
         label: () => "General",
@@ -709,8 +889,8 @@ export class General extends EezObject {
                 displayName: "LVGL version",
                 type: PropertyType.Enum,
                 enumItems: [
-                    { id: "8.3", label: "8.3" },
-                    { id: "9.0", label: "9.0" }
+                    { id: "8.3", label: "8.x" },
+                    { id: "9.0", label: "9.x" }
                 ],
                 enumDisallowUndefined: true,
                 disabled: (general: General) =>
@@ -747,7 +927,6 @@ export class General extends EezObject {
                 type: PropertyType.Array,
                 typeClass: ExtensionDirective,
                 defaultValue: [],
-                arrayItemOrientation: "vertical",
                 partOfNavigation: false,
                 enumerable: false,
                 formText:
@@ -760,7 +939,6 @@ export class General extends EezObject {
                 type: PropertyType.Array,
                 typeClass: ImportDirective,
                 defaultValue: [],
-                arrayItemOrientation: "vertical",
                 disabled: (general: General) => {
                     const project = getProject(general);
                     return (
@@ -797,6 +975,18 @@ export class General extends EezObject {
                 disabled: isNotLVGLProject
             },
             {
+                name: "displayBorderRadius",
+                type: PropertyType.Number,
+                disabled: (general: General) =>
+                    isNotLVGLProject(general) || general.circularDisplay
+            },
+            {
+                name: "darkTheme",
+                type: PropertyType.Boolean,
+                checkboxStyleSwitch: true,
+                disabled: isNotLVGLProject
+            },
+            {
                 name: "colorFormat",
                 type: PropertyType.Enum,
                 enumItems: [
@@ -817,6 +1007,34 @@ export class General extends EezObject {
                         general.projectType != ProjectType.FIRMWARE &&
                         general.projectType != ProjectType.FIRMWARE_MODULE &&
                         general.projectType != ProjectType.LVGL
+                    );
+                }
+            },
+            {
+                name: "hiddenWidgetLines",
+                type: PropertyType.Enum,
+                enumItems: [
+                    { id: "visible", label: "Fully visible" },
+                    { id: "dimmed", label: "Dimmed" },
+                    { id: "hidden", label: "Hidden" }
+                ],
+                enumDisallowUndefined: true,
+                disabled: (general: General) => {
+                    return (
+                        !general.flowSupport &&
+                        general.projectType != ProjectType.DASHBOARD
+                    );
+                }
+            },
+            {
+                name: "dimmedLinesOpacity",
+                displayName: "Dimmed lines opacity (%)",
+                type: PropertyType.Number,
+                disabled: (general: General) => {
+                    return (
+                        (!general.flowSupport &&
+                            general.projectType != ProjectType.DASHBOARD) ||
+                        general.hiddenWidgetLines != "dimmed"
                     );
                 }
             },
@@ -862,11 +1080,23 @@ export class General extends EezObject {
                 type: PropertyType.String
             },
             {
+                name: "author",
+                type: PropertyType.String
+            },
+            {
+                name: "authorLink",
+                type: PropertyType.String
+            },
+            {
+                name: "minStudioVersion",
+                displayName: "Min. studio version",
+                type: PropertyType.String
+            },
+            {
                 name: "resourceFiles",
                 type: PropertyType.Array,
                 typeClass: ResourceFile,
                 defaultValue: [],
-                arrayItemOrientation: "vertical",
                 partOfNavigation: false,
                 enumerable: false,
                 disabled: (general: General) =>
@@ -992,6 +1222,18 @@ export class General extends EezObject {
                     jsObject.commandsProtocol = "SCPI";
                 }
             }
+
+            if (jsObject.displayBorderRadius == undefined) {
+                jsObject.displayBorderRadius = 0;
+            }
+
+            if (jsObject.hiddenWidgetLines == undefined) {
+                jsObject.hiddenWidgetLines = "dimmed";
+            }
+
+            if (jsObject.dimmedLinesOpacity == undefined) {
+                jsObject.dimmedLinesOpacity = "20";
+            }
         },
 
         updateObjectValueHook: (general: General, values: Partial<General>) => {
@@ -1025,14 +1267,21 @@ export class General extends EezObject {
             displayWidth: observable,
             displayHeight: observable,
             circularDisplay: observable,
+            displayBorderRadius: observable,
+            darkTheme: observable,
             colorFormat: observable,
             description: observable,
             image: observable,
             keywords: observable,
             targetPlatform: observable,
             targetPlatformLink: observable,
+            author: observable,
+            authorLink: observable,
+            minStudioVersion: observable,
             resourceFiles: observable,
-            commandsProtocol: observable
+            commandsProtocol: observable,
+            hiddenWidgetLines: observable,
+            dimmedLinesOpacity: observable
         });
     }
 }
@@ -1107,14 +1356,17 @@ function getProjectClassInfo() {
                 name: "colors",
                 type: PropertyType.Array,
                 typeClass: Color,
-                partOfNavigation: false,
                 hideInPropertyGrid: true
             },
             {
                 name: "themes",
                 type: PropertyType.Array,
                 typeClass: Theme,
-                partOfNavigation: false,
+                hideInPropertyGrid: true
+            },
+            {
+                name: "themesVersion",
+                type: PropertyType.Number,
                 hideInPropertyGrid: true
             }
         ];
@@ -1126,8 +1378,22 @@ function getProjectClassInfo() {
                 if (
                     projectJs.settings.general.projectType == ProjectType.LVGL
                 ) {
+                    if (projectJs.themesVersion == undefined) {
+                        projectJs.themesVersion = 1;
+                        projectJs.themes = [{ name: "Default" }];
+                        projectJs.colors = [];
+                    }
+
                     delete projectJs.styles;
                     delete projectJs.texts;
+
+                    if (!projectJs.lvglGroups) {
+                        projectJs.lvglGroups = {};
+                    }
+
+                    if (!projectJs.lvglGroups.groups) {
+                        projectJs.lvglGroups.groups = [];
+                    }
                 }
 
                 if (projectJs.data) {
@@ -1371,9 +1637,10 @@ function getProjectClassInfo() {
                         if (
                             projectFeature.key == "fonts" ||
                             projectFeature.key == "bitmaps" ||
-                            projectFeature.key == "lvglStyles"
+                            projectFeature.key == "lvglStyles" ||
+                            projectFeature.key == "lvglGroups"
                         ) {
-                            return false;
+                            return true;
                         }
                         if (
                             projectFeature.key == "styles" ||
@@ -1387,7 +1654,10 @@ function getProjectClassInfo() {
                             return true;
                         }
                     } else {
-                        if (projectFeature.key == "lvglStyles") {
+                        if (
+                            projectFeature.key == "lvglStyles" ||
+                            projectFeature.key == "lvglGroups"
+                        ) {
                             return true;
                         }
                     }
@@ -1421,39 +1691,21 @@ export class Project extends EezObject {
     _store!: ProjectStore;
     _isReadOnly: boolean = false;
     _isDashboardBuild: boolean = false;
-
     _fullyLoaded = false;
-
     _assets = new Assets(this);
-
-    get _objectsMap() {
-        const objectsMap = new Map<string, EezObject>();
-
-        for (const object of visitObjects(this)) {
-            if (object instanceof EezObject) {
-                objectsMap.set(object.objID, object);
-            }
-        }
-
-        return objectsMap;
-    }
 
     settings: Settings;
     variables: ProjectVariables;
     actions: Action[];
-
     userPages: Page[];
     userWidgets: Page[];
-
-    get pages() {
-        return [...this.userPages, ...this.userWidgets];
-    }
-
     styles: Style[];
+    lvglStyles: LVGLStyles;
+    lvglGroups: LVGLGroups;
+    bitmaps: Bitmap[];
     fonts: Font[];
     texts: Texts;
     readme: Readme;
-    bitmaps: Bitmap[];
     scpi: Scpi;
     instrumentCommands: InstrumentCommands;
     shortcuts: Shortcuts;
@@ -1463,13 +1715,13 @@ export class Project extends EezObject {
 
     colors: Color[];
     themes: Theme[];
-
-    lvglStyles: LVGLStyles;
+    themesVersion: number;
 
     constructor() {
         super();
 
         makeObservable(this, {
+            _themeColors: observable,
             pages: computed,
             projectName: computed,
             importDirective: computed,
@@ -1482,7 +1734,8 @@ export class Project extends EezObject {
             projectTypeTraits: computed,
             _objectsMap: computed,
             missingExtensions: computed,
-            allStyles: computed
+            allStyles: computed,
+            allLvglStyles: computed
         });
     }
 
@@ -1497,6 +1750,8 @@ export class Project extends EezObject {
             userPages: observable,
             userWidgets: observable,
             styles: observable,
+            lvglStyles: observable,
+            lvglGroups: observable,
             fonts: observable,
             texts: observable,
             readme: observable,
@@ -1509,10 +1764,25 @@ export class Project extends EezObject {
             changes: observable,
             colors: observable,
             themes: observable,
-            _themeColors: observable,
 
             setThemeColor: action
         });
+    }
+
+    get _objectsMap() {
+        const objectsMap = new Map<string, EezObject>();
+
+        for (const object of visitObjects(this)) {
+            if (object instanceof EezObject) {
+                objectsMap.set(object.objID, object);
+            }
+        }
+
+        return objectsMap;
+    }
+
+    get pages() {
+        return [...this.userPages, ...this.userWidgets];
     }
 
     get projectTypeTraits() {
@@ -1739,6 +2009,14 @@ export class Project extends EezObject {
 
         enableTabOnBorder(
             this._store.layoutModels.rootEditor,
+            LayoutModels.LVGL_GROUPS_TAB_ID,
+            LayoutModels.LVGL_GROUPS_TAB,
+            FlexLayout.DockLocation.RIGHT,
+            this.lvglGroups != undefined
+        );
+
+        enableTabOnBorder(
+            this._store.layoutModels.rootEditor,
             LayoutModels.FONTS_TAB_ID,
             LayoutModels.FONTS_TAB,
             FlexLayout.DockLocation.RIGHT,
@@ -1758,7 +2036,7 @@ export class Project extends EezObject {
             LayoutModels.THEMES_TAB_ID,
             LayoutModels.THEMES_TAB,
             FlexLayout.DockLocation.RIGHT,
-            !this.projectTypeTraits.isLVGL
+            true //!this.projectTypeTraits.isLVGL
         );
 
         enableTabOnBorder(
@@ -1829,6 +2107,14 @@ export class Project extends EezObject {
             LayoutModels.COMPONENTS_PALETTE_TAB_ID,
             flowSupport
         );
+
+        enableTab(
+            this._store.layoutModels.rootEditor,
+            LayoutModels.COMPONENTS_PALETTE_TAB_ID,
+            LayoutModels.COMPONENTS_PALETTE_TAB,
+            LayoutModels.PROPERTIES_TAB_ID,
+            settingsController.showComponentsPaletteInProjectEditor
+        );
     }
 
     get missingExtensions() {
@@ -1854,6 +2140,25 @@ export class Project extends EezObject {
         }
 
         return styles;
+    }
+
+    get allLvglStyles() {
+        const lvglStyles: LVGLStyle[] = [];
+
+        function addStyles(style: LVGLStyle) {
+            lvglStyles.push(style);
+            for (const childStyle of style.childStyles) {
+                addStyles(childStyle);
+            }
+        }
+
+        if (this.lvglStyles) {
+            for (const style of this.lvglStyles.styles) {
+                addStyles(style);
+            }
+        }
+
+        return lvglStyles;
     }
 }
 

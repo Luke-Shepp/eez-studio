@@ -27,7 +27,11 @@ export class ExtractFont implements IFontExtract {
 
         const range: number[] = [];
         this.params.encodings!.map(encodingRange =>
-            range.push(encodingRange.from, encodingRange.to, encodingRange.from)
+            range.push(
+                encodingRange.from,
+                encodingRange.to,
+                encodingRange.mapped_from ?? encodingRange.from
+            )
         );
 
         const symbols = this.params.symbols ?? "";
@@ -63,7 +67,11 @@ export class ExtractFont implements IFontExtract {
             lv_include: this.params.lvglInclude,
             no_kerning: false,
             no_prefilter: false,
-            fast_kerning: false
+            fast_kerning: false,
+            opts_string: this.params.opts_string,
+            lv_fallback: this.params.lv_fallback
+                ? this.params.lv_fallback
+                : undefined
         };
 
         // wait for !extractBusy
@@ -149,5 +157,7 @@ export class ExtractFont implements IFontExtract {
         });
     };
 
-    freeResources() {}
+    freeResources() {
+        extractBusy = false;
+    }
 }

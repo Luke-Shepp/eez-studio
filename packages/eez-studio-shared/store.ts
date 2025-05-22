@@ -1,8 +1,9 @@
 import type * as ElectronModule from "electron";
 import { observable, computed, action, toJS, makeObservable } from "mobx";
 import { each, map, keys, pickBy } from "lodash";
+import type { Database } from "better-sqlite3";
 
-import { db } from "eez-studio-shared/db-path";
+import { db } from "eez-studio-shared/db";
 import { watch, sendMessage, registerSource } from "eez-studio-shared/notify";
 import { isRenderer } from "eez-studio-shared/util-electron";
 
@@ -162,6 +163,7 @@ export interface IFilterSpecification {
 export interface IStoreOperationOptions {
     undoable?: boolean;
     deletePermanently?: boolean;
+    transaction?: string;
 }
 
 export interface IStore {
@@ -213,7 +215,7 @@ export function createStore({
               tableName: string;
           }
     )[];
-    versions: string[];
+    versions: (string | ((db: Database) => void))[];
     properties: { [propertyName: string]: IType };
     create?: (props: any) => any;
     filterMessage?: (
@@ -294,6 +296,17 @@ export function createStore({
         return object.id;
     }
 
+    function notifyCreateObject(objectId: string) {
+        const object = findById(objectId);
+
+        const notifyArg = {
+            op: "create",
+            object,
+            options: {}
+        };
+        sendMessage(store.notifySource, notifyArg);
+    }
+
     function execUpdateObject(object: any, options?: IStoreOperationOptions) {
         const changedProperties = pickBy(
             object,
@@ -316,7 +329,7 @@ export function createStore({
                 ","
             )} FROM "${storeName}" WHERE id = ?`;
 
-            const row = db.prepare(query).get(object.id);
+            const row: any = db.prepare(query).get(object.id);
             map(propertyNames, propertyName => {
                 undoValues.push(row[propertyName]);
                 let type = properties[propertyName];
@@ -517,6 +530,13 @@ export function createStore({
         );
 
         ipcMain.on(
+            "shared/store/create-object-notify/" + storeName,
+            (event: any, arg: any) => {
+                notifyCreateObject(arg.objectId);
+            }
+        );
+
+        ipcMain.on(
             "shared/store/update-object/" + storeName,
             (event: any, arg: any) => {
                 execUpdateObject(arg.object, arg.options);
@@ -694,7 +714,7 @@ export function createStore({
                         `SELECT * FROM versions WHERE tableName = '${versionTable.tableName}'`
                     );
                 }
-                const versionRow = versionRows.get();
+                const versionRow: any = versionRows.get();
                 if (versionRow !== undefined) {
                     version = versionRow.version;
                     break;
@@ -709,7 +729,12 @@ export function createStore({
         }
 
         while (version < versions.length) {
-            db.exec(versions[version++]);
+            const versionSQL = versions[version++];
+            if (typeof versionSQL === "function") {
+                versionSQL(db);
+            } else {
+                db.exec(versionSQL);
+            }
         }
 
         if (onInit) {
@@ -882,8 +907,18 @@ export function createStore({
 
     ////////////////////////////////////////////////////////////////////////////////
 
+    allStores.push({
+        store,
+        versions
+    });
+
     return store;
 }
+
+export const allStores: {
+    store: IStore;
+    versions: (string | ((db: Database) => void))[];
+}[] = [];
 
 ////////////////////////////////////////////////////////////////////////////////
 

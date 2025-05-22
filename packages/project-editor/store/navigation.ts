@@ -1,29 +1,64 @@
-import { computed, makeObservable, runInAction } from "mobx";
+import {
+    autorun,
+    computed,
+    IReactionDisposer,
+    makeObservable,
+    runInAction
+} from "mobx";
 import { observable, action } from "mobx";
+import * as FlexLayout from "flexlayout-react";
 
 import { IEezObject, getParent } from "project-editor/core/object";
 import { ProjectEditor } from "project-editor/project-editor-interface";
-import type { ProjectStore } from "project-editor/store";
+import { LayoutModels, type ProjectStore } from "project-editor/store";
 import {
     isValue,
     getObjectPathAsString,
-    findPropertyByChildObject
+    findPropertyByChildObject,
+    getAncestorOfType
 } from "project-editor/store/helper";
+import type { PageTabState } from "project-editor/features/page/PageEditor";
 
 ////////////////////////////////////////////////////////////////////////////////
 
 export interface IPanel {
     selectedObject: IEezObject | undefined;
     selectedObjects?: IEezObject[];
-    cutSelection(): void;
-    copySelection(): void;
-    pasteSelection(): void;
-    deleteSelection(): void;
+
     selectAll?(): void;
+
+    canCut?(): boolean;
+    cutSelection?(): void;
+
+    canCopy?(): boolean;
+    copySelection?(): void;
+
+    canPaste?(): boolean;
+    pasteSelection?(): void;
+
+    canDelete?(): boolean;
+    deleteSelection?(): void;
+
+    doNotUsePropertyGrid?(): boolean;
 }
 
 export class NavigationStore {
-    selectedPanel: IPanel | undefined;
+    selectedPanelForEdit: IPanel | undefined;
+    selectedPanelForRuntime: IPanel | undefined;
+
+    get selectedPanel() {
+        return this.projectStore.runtime
+            ? this.selectedPanelForRuntime
+            : this.selectedPanelForEdit;
+    }
+
+    set selectedPanel(panel: IPanel | undefined) {
+        if (this.projectStore.runtime) {
+            this.selectedPanelForRuntime = panel;
+        } else {
+            this.selectedPanelForEdit = panel;
+        }
+    }
 
     selectedUserPageObject = observable.box<IEezObject>();
     selectedUserWidgetObject = observable.box<IEezObject>();
@@ -44,6 +79,7 @@ export class NavigationStore {
     selectedInstrumentCommandsObject = observable.box<IEezObject>();
     selectedTextResourceObject = observable.box<IEezObject>();
     selectedLanguageObject = observable.box<IEezObject>();
+    selectedLvglGroupObject = observable.box<IEezObject>();
 
     static VARIABLES_SUB_NAVIGATION_ID =
         "variables-tab/sub-navigation/selected-item";
@@ -70,13 +106,50 @@ export class NavigationStore {
 
     selectedLocalVariable = observable.box<IEezObject>();
 
+    dispose1: IReactionDisposer;
+
     constructor(public projectStore: ProjectStore) {
         makeObservable(this, {
-            selectedPanel: observable,
+            selectedPanelForEdit: observable,
+            selectedPanelForRuntime: observable,
             subnavigationSelectedItems: observable,
             propertyGridObjects: computed,
             setSelectedPanel: action,
             showObjects: action
+        });
+
+        this.dispose1 = autorun(() => {
+            const objects = this.propertyGridObjects ?? [];
+
+            const objectsLength = objects.length;
+
+            const layoutModel = this.projectStore.layoutModels?.rootEditor;
+            if (!layoutModel) {
+                return;
+            }
+
+            const node = layoutModel.getNodeById(
+                LayoutModels.PROPERTIES_TAB_ID
+            );
+            if (!node) {
+                return;
+            }
+
+            const parent = node.getParent() as FlexLayout.BorderNode;
+            if (!(parent instanceof FlexLayout.BorderNode)) {
+                return;
+            }
+
+            const isSelected = parent.getSelectedNode() == node;
+
+            if (
+                (isSelected && objectsLength == 0) ||
+                (!isSelected && objectsLength > 0)
+            ) {
+                layoutModel.doAction(
+                    FlexLayout.Actions.selectTab(node.getId())
+                );
+            }
         });
     }
 
@@ -234,6 +307,14 @@ export class NavigationStore {
                 );
             }
 
+            if (state.selectedLvglGroupObject) {
+                this.selectedLvglGroupObject.set(
+                    this.projectStore.getObjectFromStringPath(
+                        state.selectedLvglGroupObject
+                    )
+                );
+            }
+
             if (state.subnavigationSelectedItems) {
                 this.subnavigationSelectedItems =
                     state.subnavigationSelectedItems;
@@ -309,6 +390,9 @@ export class NavigationStore {
             selectedLanguageObject: this.selectedLanguageObject.get()
                 ? getObjectPathAsString(this.selectedLanguageObject.get())
                 : undefined,
+            selectedLvglGroupObject: this.selectedLvglGroupObject.get()
+                ? getObjectPathAsString(this.selectedLvglGroupObject.get())
+                : undefined,
 
             subnavigationSelectedItems: this.subnavigationSelectedItems
         };
@@ -316,13 +400,41 @@ export class NavigationStore {
 
     initialPanelSet = false;
 
-    setInitialSelectedPanel(selectedPanel: IPanel) {
+    mountPanel(panel: IPanel) {
         if (!this.initialPanelSet) {
-            this.setSelectedPanel(selectedPanel);
+            if (this.selectedPanel) {
+                let selectedObject = panel.selectedObject;
+                if (
+                    !selectedObject &&
+                    panel.selectedObjects &&
+                    panel.selectedObjects.length > 0
+                ) {
+                    selectedObject = panel.selectedObjects[0];
+                }
+
+                if (
+                    selectedObject &&
+                    getAncestorOfType(
+                        selectedObject,
+                        ProjectEditor.FlowClass.classInfo
+                    )
+                ) {
+                    this.setSelectedPanel(panel);
+                }
+            } else {
+                this.setSelectedPanel(panel);
+            }
+
             setTimeout(() => {
                 this.initialPanelSet = true;
             }, 100);
         }
+    }
+
+    unmountPanel(panel: IPanel) {
+        // if (this.selectedPanel === panel) {
+        //     this.setSelectedPanel(undefined);
+        // }
     }
 
     setSelectedPanel(selectedPanel: IPanel | undefined) {
@@ -364,10 +476,20 @@ export class NavigationStore {
         }
     }
 
+    lastPropertyGridObjects: IEezObject[] = [];
+
     get propertyGridObjects() {
         let objects: IEezObject[];
 
         const navigationStore = this;
+
+        if (
+            navigationStore.selectedPanel &&
+            navigationStore.selectedPanel.doNotUsePropertyGrid &&
+            navigationStore.selectedPanel.doNotUsePropertyGrid()
+        ) {
+            return this.lastPropertyGridObjects;
+        }
 
         if (
             navigationStore.selectedPanel &&
@@ -380,6 +502,23 @@ export class NavigationStore {
             navigationStore.selectedPanel.selectedObject !== undefined
         ) {
             objects = [navigationStore.selectedPanel.selectedObject];
+        } else if (
+            this.projectStore.editorsStore &&
+            this.projectStore.editorsStore.activeEditor &&
+            this.projectStore.editorsStore.activeEditor.object instanceof
+                ProjectEditor.FlowClass
+        ) {
+            const editor = this.projectStore.editorsStore.activeEditor;
+            const pageTabState = editor.state as PageTabState;
+            if (
+                pageTabState &&
+                pageTabState.selectedObjects != undefined &&
+                pageTabState.selectedObjects.length > 0
+            ) {
+                objects = pageTabState.selectedObjects;
+            } else {
+                objects = [];
+            }
         } else {
             objects = [];
         }
@@ -401,6 +540,8 @@ export class NavigationStore {
             }
         }
 
+        this.lastPropertyGridObjects = objects;
+
         return objects;
     }
 
@@ -408,5 +549,6 @@ export class NavigationStore {
         runInAction(() => {
             this.selectedPanel = undefined;
         });
+        this.dispose1();
     }
 }

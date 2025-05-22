@@ -1,10 +1,12 @@
+import path from "path";
 import React from "react";
 import {
     observable,
     action,
     runInAction,
     makeObservable,
-    computed
+    computed,
+    toJS
 } from "mobx";
 import { observer } from "mobx-react";
 import classNames from "classnames";
@@ -20,7 +22,8 @@ import {
     getParent,
     MessageType,
     getId,
-    IMessage
+    IMessage,
+    IObjectClassInfo
 } from "project-editor/core/object";
 import {
     getAncestorOfType,
@@ -29,6 +32,7 @@ import {
     getListLabel,
     getProjectStore,
     Message,
+    ProjectStore,
     propertyNotFoundMessage,
     propertyNotSetMessage,
     Section
@@ -72,6 +76,7 @@ import {
 import { calcComponentGeometry } from "project-editor/flow/editor/render";
 import {
     getStructureFromType,
+    migrateType,
     ValueType,
     VariableTypeUI
 } from "project-editor/features/variable/value-type";
@@ -109,14 +114,20 @@ import {
     COMPONENT_TYPE_SORT_ARRAY_ACTION,
     COMPONENT_TYPE_TEST_AND_SET_ACTION,
     COMPONENT_TYPE_LABEL_IN_ACTION,
-    COMPONENT_TYPE_LABEL_OUT_ACTION
+    COMPONENT_TYPE_LABEL_OUT_ACTION,
+    COMPONENT_TYPE_SET_COLOR_THEME_ACTION
 } from "project-editor/flow/components/component-types";
 import { makeEndInstruction } from "project-editor/flow/expression/instructions";
 import { ProjectEditor } from "project-editor/project-editor-interface";
 import {
+    CALL_ACTION_ICON,
+    CALL_NATIVE_ACTION_ICON,
     CLIPBOARD_WRITE_ICON,
+    FOCUS_WIDGET_ICON,
     LANGUAGE_ICON,
     LOG_ICON,
+    PALETTE_ICON,
+    PLAY_AUDIO_ICON,
     PRINT_TO_PDF_ICON
 } from "project-editor/ui-components/icons";
 import { humanize } from "eez-studio-shared/string";
@@ -128,6 +139,11 @@ import {
     FLOW_EVENT_KEYDOWN
 } from "project-editor/flow/runtime/flow-events";
 import { DashboardComponentContext } from "project-editor/flow/runtime/worker-dashboard-component-context";
+import {
+    getAdditionalFlowPropertiesForUserProperties,
+    UserPropertyValues,
+    userPropertyValuesProperty
+} from "project-editor/flow/user-property";
 
 const NOT_NAMED_LABEL = "";
 
@@ -205,6 +221,9 @@ export class InputActionComponent extends ActionComponent {
                 propertyGridGroup: specificGroup
             }
         ],
+        beforeLoadHook: (object: InputActionComponent, objectJS: any) => {
+            migrateType(objectJS, "inputType");
+        },
         check: (
             inputActionComponent: InputActionComponent,
             messages: IMessage[]
@@ -292,6 +311,9 @@ export class OutputActionComponent extends ActionComponent {
                 propertyGridGroup: specificGroup
             }
         ],
+        beforeLoadHook: (object: OutputActionComponent, objectJS: any) => {
+            migrateType(objectJS, "outputType");
+        },
         check: (
             outputActionComponent: OutputActionComponent,
             messages: IMessage[]
@@ -531,7 +553,6 @@ export class EvalJSExprActionComponent extends ActionComponent {
                 type: PropertyType.MultilineText,
                 propertyGridGroup: specificGroup,
                 monospaceFont: true,
-                disableSpellcheck: true,
                 flowProperty: "template-literal"
             }
         ],
@@ -781,9 +802,9 @@ export class SetVariableActionComponent extends ActionComponent {
         properties: [
             {
                 name: "entries",
+                displayName: "Set variable entries",
                 type: PropertyType.Array,
                 typeClass: SetVariableEntry,
-                arrayItemOrientation: "vertical",
                 propertyGridGroup: specificGroup,
                 partOfNavigation: false,
                 enumerable: false,
@@ -820,7 +841,7 @@ export class SetVariableActionComponent extends ActionComponent {
         ),
         componentHeaderColor: "#A6BBCF",
         defaultValue: {
-            entries: []
+            entries: [{}]
         }
     });
 
@@ -1020,7 +1041,6 @@ export class SwitchActionComponent extends ActionComponent {
                 displayName: "Cases",
                 type: PropertyType.Array,
                 typeClass: SwitchTest,
-                arrayItemOrientation: "vertical",
                 propertyGridGroup: specificGroup,
                 partOfNavigation: false,
                 enumerable: false,
@@ -1044,7 +1064,9 @@ export class SwitchActionComponent extends ActionComponent {
             </svg>
         ),
         componentHeaderColor: "#AAAA66",
-        defaultValue: {}
+        defaultValue: {
+            tests: [{}]
+        }
     });
 
     tests: SwitchTest[];
@@ -2057,42 +2079,173 @@ export class LogActionComponent extends ActionComponent {
 
 ////////////////////////////////////////////////////////////////////////////////
 
-export class CallActionActionComponent extends ActionComponent {
+export class PlayAudioActionComponent extends ActionComponent {
     static classInfo = makeDerivedClassInfo(ActionComponent.classInfo, {
-        flowComponentId: COMPONENT_TYPE_CALL_ACTION_ACTION,
+        enabledInComponentPalette: (projectType: ProjectType) =>
+            projectType === ProjectType.DASHBOARD,
 
         properties: [
             makeExpressionProperty(
                 {
-                    name: "action",
-                    type: PropertyType.ObjectReference,
-                    referencedObjectCollectionPath: "actions",
+                    name: "audioFile",
+                    type: PropertyType.MultilineText,
                     propertyGridGroup: specificGroup
                 },
                 "string"
             )
         ],
+        defaultValue: {},
+        icon: PLAY_AUDIO_ICON,
+        componentHeaderColor: "#C9E9D2",
+        execute: (context: IDashboardComponentContext) => {
+            const audioFile = context.evalProperty<string>("audioFile");
+            if (audioFile == undefined) {
+                context.throwError(`Invalid Audio file property`);
+                return;
+            }
+
+            // Create an AudioContext
+            const audioContext = new window.AudioContext();
+
+            // Function to play audio
+            function playAudio(url: string) {
+                fetch(url)
+                    .then(response => response.arrayBuffer())
+                    .then(arrayBuffer =>
+                        audioContext.decodeAudioData(arrayBuffer)
+                    )
+                    .then(audioBuffer => {
+                        const source = audioContext.createBufferSource();
+                        source.buffer = audioBuffer;
+                        source.connect(audioContext.destination);
+                        source.start(0);
+                    })
+                    .catch(error =>
+                        console.error("Error loading audio:", error)
+                    );
+            }
+
+            playAudio(audioFile);
+
+            context.propagateValueThroughSeqout();
+        }
+    });
+
+    audioFile: string;
+
+    override makeEditable() {
+        super.makeEditable();
+
+        makeObservable(this, {
+            audioFile: observable
+        });
+    }
+
+    getInputs() {
+        return [
+            {
+                name: "@seqin",
+                type: "any" as ValueType,
+                isSequenceInput: true,
+                isOptionalInput: true
+            },
+            ...super.getInputs()
+        ];
+    }
+
+    getOutputs() {
+        return [
+            {
+                name: "@seqout",
+                type: "null" as ValueType,
+                isSequenceOutput: true,
+                isOptionalOutput: true
+            },
+            ...super.getOutputs()
+        ];
+    }
+
+    getBody(flowContext: IFlowContext): React.ReactNode {
+        if (!this.audioFile) {
+            return null;
+        }
+
+        return (
+            <div className="body">
+                <pre>{path.basename(this.audioFile)}</pre>
+            </div>
+        );
+    }
+}
+
+////////////////////////////////////////////////////////////////////////////////
+
+export class CallActionActionComponent extends ActionComponent {
+    static classInfo = makeDerivedClassInfo(ActionComponent.classInfo, {
+        flowComponentId: COMPONENT_TYPE_CALL_ACTION_ACTION,
+
+        properties: [
+            {
+                name: "action",
+                type: PropertyType.ObjectReference,
+                referencedObjectCollectionPath: "actions",
+                propertyGridGroup: specificGroup
+            },
+            userPropertyValuesProperty
+        ],
+        getAdditionalFlowProperties:
+            getAdditionalFlowPropertiesForUserProperties,
         label: (component: CallActionActionComponent) => {
             if (!component.action) {
                 return "CallAction";
             }
             return component.action;
         },
-        icon: (
-            <svg
-                viewBox="0 0 24 24"
-                strokeWidth="2"
-                stroke="currentColor"
-                fill="none"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-            >
-                <path stroke="none" d="M0 0h24v24H0z" fill="none"></path>
-                <path d="M7 4a12.25 12.25 0 0 0 0 16"></path>
-                <path d="M17 4a12.25 12.25 0 0 1 0 16"></path>
-            </svg>
-        ),
-        componentHeaderColor: "#C7E9C0",
+        icon: CALL_ACTION_ICON,
+        getIcon: (
+            object?: CallActionActionComponent,
+            componentClass?: IObjectClassInfo,
+            projectStore?: ProjectStore
+        ) => {
+            let actionName;
+            if (object) {
+                actionName = object.action;
+                projectStore = ProjectEditor.getProjectStore(object);
+            } else if (componentClass) {
+                actionName = componentClass.props?.action;
+            }
+
+            if (projectStore && actionName) {
+                const action = findAction(projectStore.project, actionName);
+                if (action && action.implementationType == "native") {
+                    return CALL_NATIVE_ACTION_ICON;
+                }
+            }
+
+            return undefined;
+        },
+        componentHeaderColor: (
+            object?: CallActionActionComponent,
+            componentClass?: IObjectClassInfo,
+            projectStore?: ProjectStore
+        ) => {
+            let actionName;
+            if (object) {
+                actionName = object.action;
+                projectStore = ProjectEditor.getProjectStore(object);
+            } else if (componentClass) {
+                actionName = componentClass.props?.action;
+            }
+
+            if (projectStore && actionName) {
+                const action = findAction(projectStore.project, actionName);
+                if (action && action.implementationType == "native") {
+                    return "#9CBA93";
+                }
+            }
+
+            return "#C7E9C0";
+        },
         open: (object: CallActionActionComponent) => {
             object.open();
         },
@@ -2119,11 +2272,14 @@ export class CallActionActionComponent extends ActionComponent {
 
     action: string;
 
+    userPropertyValues: UserPropertyValues;
+
     override makeEditable() {
         super.makeEditable();
 
         makeObservable(this, {
-            action: observable
+            action: observable,
+            userPropertyValues: observable
         });
     }
 
@@ -2221,6 +2377,39 @@ export class CallActionActionComponent extends ActionComponent {
                 false
             );
         }
+    }
+
+    getBody(flowContext: IFlowContext): React.ReactNode {
+        const action = findAction(
+            flowContext.projectStore.project,
+            this.action
+        );
+        if (!action) {
+            return null;
+        }
+
+        if (action.userProperties.length == 0) {
+            return null;
+        }
+
+        return (
+            <div className="body">
+                {action.userProperties.map(userProperty => (
+                    <pre key={userProperty.name}>
+                        <>
+                            {userProperty.displayName || userProperty.name}
+                            {userProperty.assignable ? (
+                                <RightArrow />
+                            ) : (
+                                <LeftArrow />
+                            )}
+                            {this.userPropertyValues.values[userProperty.id] ||
+                                ""}
+                        </>
+                    </pre>
+                ))}
+            </div>
+        );
     }
 
     buildFlowComponentSpecific(assets: Assets, dataBuffer: DataBuffer) {
@@ -2758,7 +2947,7 @@ export class LoopActionComponent extends ActionComponent {
 
     get variableOutput(): CustomOutput | undefined {
         return this.customOutputs.find(
-            output => output.name == this.variable.trim()
+            output => output.name == this.variable?.trim()
         );
     }
 
@@ -3710,6 +3899,61 @@ export class AnimateActionComponent extends ActionComponent {
 
 ////////////////////////////////////////////////////////////////////////////////
 
+export class SetColorThemeActionComponent extends ActionComponent {
+    static classInfo = makeDerivedClassInfo(ActionComponent.classInfo, {
+        flowComponentId: COMPONENT_TYPE_SET_COLOR_THEME_ACTION,
+        componentPaletteGroupName: "GUI",
+        properties: [
+            makeExpressionProperty(
+                {
+                    name: "theme",
+                    type: PropertyType.MultilineText,
+                    propertyGridGroup: specificGroup
+                },
+                "any"
+            )
+        ],
+        icon: PALETTE_ICON,
+        componentHeaderColor: "#DEB887"
+    });
+
+    theme: string;
+
+    override makeEditable() {
+        super.makeEditable();
+
+        makeObservable(this, {
+            theme: observable
+        });
+    }
+
+    getInputs() {
+        return [
+            {
+                name: "@seqin",
+                type: "any" as ValueType,
+                isSequenceInput: true,
+                isOptionalInput: true
+            },
+            ...super.getInputs()
+        ];
+    }
+
+    getOutputs() {
+        return [
+            {
+                name: "@seqout",
+                type: "null" as ValueType,
+                isSequenceOutput: true,
+                isOptionalOutput: true
+            },
+            ...super.getOutputs()
+        ];
+    }
+}
+
+////////////////////////////////////////////////////////////////////////////////
+
 export class ClipboardWriteActionComponent extends ActionComponent {
     static classInfo = makeDerivedClassInfo(ActionComponent.classInfo, {
         componentPaletteGroupName: "GUI",
@@ -3860,118 +4104,149 @@ export class NoopActionComponent extends ActionComponent {
 ////////////////////////////////////////////////////////////////////////////////
 
 const TrixEditor = observer(
-    ({
-        component,
-        flowContext,
-        value,
-        setValue
-    }: {
+    class TrixEditor extends React.Component<{
         component: CommentActionComponent;
         flowContext: IFlowContext;
         value: string;
         setValue: (value: string) => void;
-    }) => {
-        const inputId = React.useMemo<string>(() => guid(), []);
-        const editorId = React.useMemo<string>(() => guid(), []);
+    }> {
+        inputId = guid();
+        editorId = guid();
 
-        React.useEffect(() => {
-            const trixEditor = document.getElementById(editorId) as HTMLElement;
+        trixEditor: any;
 
-            if (value != trixEditor.innerHTML) {
-                (trixEditor as any).editor.loadHTML(value);
+        onChange = () => {
+            const { component, flowContext } = this.props;
+
+            const geometry = calcComponentGeometry(
+                component,
+                this.trixEditor.closest(
+                    ".EezStudio_ComponentEnclosure"
+                )! as HTMLElement,
+                flowContext
+            );
+
+            runInAction(() => {
+                component.geometry = geometry;
+            });
+        };
+
+        onFocus = () => {
+            const trixToolbar =
+                this.trixEditor.parentElement?.querySelector("trix-toolbar");
+            if (trixToolbar instanceof HTMLElement) {
+                trixToolbar.style.visibility = "visible";
             }
 
-            const onChange = () => {
-                const geometry = calcComponentGeometry(
-                    component,
-                    trixEditor.closest(
-                        ".EezStudio_ComponentEnclosure"
-                    )! as HTMLElement,
-                    flowContext
-                );
+            if (this.trixEditor.innerHTML != this.props.value) {
+                this.props.setValue(this.trixEditor.innerHTML);
+            }
+        };
 
-                runInAction(() => {
-                    component.geometry = geometry;
-                });
-            };
-            const onFocus = () => {
-                const trixToolbar =
-                    trixEditor.parentElement?.querySelector("trix-toolbar");
-                if (trixToolbar instanceof HTMLElement) {
-                    trixToolbar.style.visibility = "visible";
+        onBlur = () => {
+            const trixToolbar =
+                this.trixEditor.parentElement?.querySelector("trix-toolbar");
+            if (trixToolbar instanceof HTMLElement) {
+                if (!document.activeElement?.classList.contains("trix-input")) {
+                    trixToolbar.style.visibility = "";
                 }
+            }
 
-                if (trixEditor.innerHTML != value) {
-                    setValue(trixEditor.innerHTML);
-                }
-            };
-            const onBlur = () => {
-                const trixToolbar =
-                    trixEditor.parentElement?.querySelector("trix-toolbar");
-                if (trixToolbar instanceof HTMLElement) {
-                    if (
-                        !document.activeElement?.classList.contains(
-                            "trix-input"
-                        )
-                    ) {
-                        trixToolbar.style.visibility = "";
-                    }
-                }
+            if (this.trixEditor.innerHTML != this.props.value) {
+                this.props.setValue(this.trixEditor.innerHTML);
+            }
+        };
 
-                if (trixEditor.innerHTML != value) {
-                    setValue(trixEditor.innerHTML);
-                }
-            };
-            const onAttachmentAdd = (event: any) => {
-                const reader = new FileReader();
-                reader.addEventListener(
-                    "load",
-                    function () {
-                        event.attachment.setAttributes({
-                            url: reader.result
-                        });
+        onAttachmentAdd = (event: any) => {
+            const reader = new FileReader();
 
-                        (trixEditor as any).editor.loadHTML(
-                            trixEditor.innerHTML
-                        );
-                    },
-                    false
-                );
-                reader.readAsDataURL(event.attachment.file);
-            };
+            reader.addEventListener(
+                "load",
+                () => {
+                    event.attachment.setAttributes({
+                        url: reader.result
+                    });
 
-            trixEditor.addEventListener("trix-change", onChange, false);
-            trixEditor.addEventListener("trix-focus", onFocus, false);
-            trixEditor.addEventListener("trix-blur", onBlur, false);
-            trixEditor.addEventListener(
-                "trix-attachment-add",
-                onAttachmentAdd,
+                    (this.trixEditor as any).editor.loadHTML(
+                        this.trixEditor.innerHTML
+                    );
+                },
                 false
             );
 
-            return () => {
-                trixEditor.removeEventListener("trix-change", onChange, false);
-                trixEditor.removeEventListener("trix-focus", onFocus, false);
-                trixEditor.removeEventListener("trix-blur", onBlur, false);
-                trixEditor.removeEventListener(
-                    "trix-attachment-add",
-                    onAttachmentAdd,
-                    false
-                );
-            };
-        }, [value]);
-
-        var attributes: { [key: string]: string } = {
-            id: editorId,
-            input: inputId
+            reader.readAsDataURL(event.attachment.file);
         };
 
-        return (
-            <div className="EezStudio_TrixEditor" tabIndex={0}>
-                {React.createElement("trix-editor", attributes)}
-                <input id={inputId} value={value ?? ""} type="hidden"></input>
-            </div>
-        );
+        setup() {
+            if (this.trixEditor) {
+                this.trixEditor.removeEventListener(
+                    "trix-change",
+                    this.onChange,
+                    false
+                );
+                this.trixEditor.removeEventListener(
+                    "trix-focus",
+                    this.onFocus,
+                    false
+                );
+                this.trixEditor.removeEventListener(
+                    "trix-blur",
+                    this.onBlur,
+                    false
+                );
+                this.trixEditor.removeEventListener(
+                    "trix-attachment-add",
+                    this.onAttachmentAdd,
+                    false
+                );
+            }
+
+            this.trixEditor = document.getElementById(
+                this.editorId
+            ) as HTMLElement;
+
+            if (this.props.value != this.trixEditor.innerHTML) {
+                (this.trixEditor as any).editor.loadHTML(this.props.value);
+            }
+
+            this.trixEditor.addEventListener(
+                "trix-change",
+                this.onChange,
+                false
+            );
+            this.trixEditor.addEventListener("trix-focus", this.onFocus, false);
+            this.trixEditor.addEventListener("trix-blur", this.onBlur, false);
+            this.trixEditor.addEventListener(
+                "trix-attachment-add",
+                this.onAttachmentAdd,
+                false
+            );
+        }
+
+        componentDidMount(): void {
+            this.setup();
+        }
+
+        render() {
+            var attributes: { [key: string]: string } = {
+                id: this.editorId,
+                input: this.inputId
+            };
+
+            return (
+                <div
+                    className="EezStudio_TrixEditor eez-flow-editor-capture-pointers"
+                    tabIndex={0}
+                >
+                    {React.createElement("trix-editor", attributes)}
+                    <input
+                        id={this.inputId}
+                        value={this.props.value ?? ""}
+                        type="hidden"
+                    ></input>
+                </div>
+            );
+        }
     }
 );
 
@@ -3979,7 +4254,7 @@ export class CommentActionComponent extends ActionComponent {
     static classInfo = makeDerivedClassInfo(ActionComponent.classInfo, {
         flowComponentId: COMPONENT_TYPE_COMMENT_ACTION,
 
-        label: () => "",
+        label: (object: CommentActionComponent) => object.description,
 
         properties: [
             {
@@ -3987,14 +4262,29 @@ export class CommentActionComponent extends ActionComponent {
                 type: PropertyType.String,
                 hideInPropertyGrid: true,
                 hideInDocumentation: "all"
+            },
+            {
+                name: "collapsed",
+                type: PropertyType.Boolean,
+                hideInPropertyGrid: true,
+                hideInDocumentation: "none"
+            },
+            {
+                name: "expandedWidth",
+                type: PropertyType.Number,
+                hideInPropertyGrid: true,
+                hideInDocumentation: "none"
             }
         ],
         beforeLoadHook: (
             object: CommentActionComponent,
             jsObject: Partial<CommentActionComponent>
         ) => {
-            if (jsObject.description) {
-                delete jsObject.description;
+            if (jsObject.collapsed == undefined) {
+                jsObject.collapsed = false;
+            }
+            if (jsObject.expandedWidth == undefined) {
+                jsObject.expandedWidth = jsObject.width;
             }
         },
         icon: (
@@ -4011,37 +4301,59 @@ export class CommentActionComponent extends ActionComponent {
             left: 0,
             top: 0,
             width: 435,
-            height: 134
+            height: 134,
+            collapsed: false
+        },
+        open: (object: CommentActionComponent) => {
+            const collapsed = !object.collapsed;
+
+            if (collapsed) {
+                ProjectEditor.getProjectStore(object).updateObject(object, {
+                    collapsed: !object.collapsed,
+                    expandedWidth: object.width
+                });
+            } else {
+                ProjectEditor.getProjectStore(object).updateObject(object, {
+                    collapsed: !object.collapsed,
+                    width: object.expandedWidth
+                });
+            }
         }
     });
 
     text: string;
+    collapsed: boolean;
+    expandedWidth: number;
 
     override makeEditable() {
         super.makeEditable();
 
         makeObservable(this, {
-            text: observable
+            text: observable,
+            collapsed: observable,
+            expandedWidth: observable
         });
     }
 
     get autoSize(): AutoSize {
-        return "height";
+        return this.collapsed ? "both" : "height";
     }
 
     getResizeHandlers(): IResizeHandler[] | undefined | false {
-        return [
-            {
-                x: 0,
-                y: 50,
-                type: "w-resize"
-            },
-            {
-                x: 100,
-                y: 50,
-                type: "e-resize"
-            }
-        ];
+        return this.collapsed
+            ? []
+            : [
+                  {
+                      x: 0,
+                      y: 50,
+                      type: "w-resize"
+                  },
+                  {
+                      x: 100,
+                      y: 50,
+                      type: "e-resize"
+                  }
+              ];
     }
 
     getClassName(flowContext: IFlowContext) {
@@ -4053,17 +4365,19 @@ export class CommentActionComponent extends ActionComponent {
 
     getBody(flowContext: IFlowContext): React.ReactNode {
         return (
-            <TrixEditor
-                component={this}
-                flowContext={flowContext}
-                value={this.text}
-                setValue={action((value: string) => {
-                    const projectStore = getProjectStore(this);
-                    projectStore.updateObject(this, {
-                        text: value
-                    });
-                })}
-            ></TrixEditor>
+            !this.collapsed && (
+                <TrixEditor
+                    component={this}
+                    flowContext={flowContext}
+                    value={this.text}
+                    setValue={action((value: string) => {
+                        const projectStore = getProjectStore(this);
+                        projectStore.updateObject(this, {
+                            text: value
+                        });
+                    })}
+                ></TrixEditor>
+            )
         );
     }
 }
@@ -4302,7 +4616,7 @@ export class LabelOutActionComponent extends ActionComponent {
     buildFlowComponentSpecific(assets: Assets, dataBuffer: DataBuffer) {
         // labelInComponentIndex
         const labelInComponent = this.labelInComponent;
-        dataBuffer.writeUint16(
+        dataBuffer.writeInt16(
             labelInComponent ? assets.getComponentIndex(labelInComponent) : -1
         );
     }
@@ -4316,8 +4630,15 @@ export class LabelOutActionComponent extends ActionComponent {
 
         let titleStyle: React.CSSProperties | undefined;
         if (classInfo.componentHeaderColor) {
+            let backgroundColor;
+            if (typeof classInfo.componentHeaderColor == "string") {
+                backgroundColor = classInfo.componentHeaderColor;
+            } else {
+                backgroundColor = classInfo.componentHeaderColor(this);
+            }
+
             titleStyle = {
-                backgroundColor: classInfo.componentHeaderColor
+                backgroundColor
             };
         }
 
@@ -4454,8 +4775,15 @@ export class LabelInActionComponent extends ActionComponent {
 
         let titleStyle: React.CSSProperties | undefined;
         if (classInfo.componentHeaderColor) {
+            let backgroundColor;
+            if (typeof classInfo.componentHeaderColor == "string") {
+                backgroundColor = classInfo.componentHeaderColor;
+            } else {
+                backgroundColor = classInfo.componentHeaderColor(this);
+            }
+
             titleStyle = {
-                backgroundColor: classInfo.componentHeaderColor
+                backgroundColor
             };
         }
 
@@ -4492,6 +4820,15 @@ export class LabelInActionComponent extends ActionComponent {
 
 ////////////////////////////////////////////////////////////////////////////////
 
+const DEFAULT_OPTIONS = `{
+    landscape: false,
+    scale: 1,
+    pageSize: "Letter",
+    margins: {
+        marginType: "default"
+    }
+}`;
+
 export class PrintToPDFActionComponent extends ActionComponent {
     static classInfo = makeDerivedClassInfo(ActionComponent.classInfo, {
         componentPaletteGroupName: "GUI",
@@ -4503,8 +4840,20 @@ export class PrintToPDFActionComponent extends ActionComponent {
                     propertyGridGroup: specificGroup
                 },
                 "widget"
+            ),
+            makeExpressionProperty(
+                {
+                    name: "options",
+                    type: PropertyType.MultilineText,
+                    propertyGridGroup: specificGroup,
+                    isOptional: true
+                },
+                "json"
             )
         ],
+        defaultValue: {
+            options: DEFAULT_OPTIONS
+        },
         icon: PRINT_TO_PDF_ICON,
         componentHeaderColor: "#DEB887",
         execute: (context: IDashboardComponentContext) => {
@@ -4541,7 +4890,13 @@ export class PrintToPDFActionComponent extends ActionComponent {
                 return;
             }
 
-            executionState.printWidget();
+            const options = context.evalProperty<any>("options");
+            if (options != undefined && typeof options != "object") {
+                context.throwError(`Invalid Options property`);
+                return;
+            }
+
+            executionState.printWidget(options ? toJS(options) : {});
 
             context.propagateValueThroughSeqout();
         }
@@ -4584,6 +4939,110 @@ export class PrintToPDFActionComponent extends ActionComponent {
 
 ////////////////////////////////////////////////////////////////////////////////
 
+export class FocusWidgetActionComponent extends ActionComponent {
+    static classInfo = makeDerivedClassInfo(ActionComponent.classInfo, {
+        componentPaletteGroupName: "GUI",
+        properties: [
+            makeExpressionProperty(
+                {
+                    name: "widget",
+                    type: PropertyType.MultilineText,
+                    propertyGridGroup: specificGroup
+                },
+                "widget"
+            )
+        ],
+        defaultValue: {},
+        icon: FOCUS_WIDGET_ICON,
+        componentHeaderColor: "#DEB887",
+        execute: (context: IDashboardComponentContext) => {
+            const widget = context.evalProperty<number>("widget");
+            if (widget == undefined) {
+                context.throwError(`Invalid Widget property`);
+                return;
+            }
+
+            const widgetInfo =
+                context.WasmFlowRuntime.getWidgetHandleInfo(widget);
+
+            if (!widgetInfo) {
+                context.throwError(`Invalid Widget handle`);
+                return;
+            }
+
+            const widgetContext = new DashboardComponentContext(
+                context.WasmFlowRuntime,
+                widgetInfo.flowStateIndex,
+                widgetInfo.componentIndex
+            );
+
+            const executionState =
+                widgetContext.getComponentExecutionState<any>();
+
+            if (!executionState) {
+                context.throwError(`Widget not initialized`);
+                return;
+            }
+
+            if (!executionState.focus) {
+                context.throwError(`Widget doesn't support focus`);
+                return;
+            }
+
+            executionState.focus();
+
+            context.propagateValueThroughSeqout();
+        }
+    });
+
+    widget: string;
+
+    override makeEditable() {
+        super.makeEditable();
+
+        makeObservable(this, {
+            widget: observable
+        });
+    }
+
+    getInputs() {
+        return [
+            {
+                name: "@seqin",
+                type: "any" as ValueType,
+                isSequenceInput: true,
+                isOptionalInput: true
+            },
+            ...super.getInputs()
+        ];
+    }
+
+    getOutputs() {
+        return [
+            {
+                name: "@seqout",
+                type: "null" as ValueType,
+                isSequenceOutput: true,
+                isOptionalOutput: true
+            },
+            ...super.getOutputs()
+        ];
+    }
+
+    getBody(flowContext: IFlowContext): React.ReactNode {
+        if (!this.widget) {
+            return null;
+        }
+        return (
+            <div className="body">
+                <pre>{this.widget}</pre>
+            </div>
+        );
+    }
+}
+
+////////////////////////////////////////////////////////////////////////////////
+
 registerClass("StartActionComponent", StartActionComponent);
 registerClass("EndActionComponent", EndActionComponent);
 registerClass("InputActionComponent", InputActionComponent);
@@ -4613,6 +5072,8 @@ registerClass("SortArrayActionComponent", SortArrayActionComponent);
 
 registerClass("LogActionComponent", LogActionComponent);
 
+registerClass("PlayAudioActionComponent", PlayAudioActionComponent);
+
 registerClass("ReadSettingActionComponent", ReadSettingActionComponent);
 registerClass("WriteSettingsActionComponent", WriteSettingsActionComponent);
 
@@ -4636,6 +5097,9 @@ registerClass(
 registerClass("OverrideStyleActionComponent", OverrideStyleActionComponent);
 
 registerClass("AnimateActionComponent", AnimateActionComponent);
+
+registerClass("SetColorThemeActionComponent", SetColorThemeActionComponent);
+
 registerClass("ClipboardWriteActionComponent", ClipboardWriteActionComponent);
 
 registerClass("ErrorActionComponent", ErrorActionComponent);
@@ -4648,3 +5112,5 @@ registerClass("NoopActionComponent", NoopActionComponent);
 registerClass("CommentActionComponent", CommentActionComponent);
 
 registerClass("PrintToPDFActionComponent", PrintToPDFActionComponent);
+
+registerClass("FocusWidgetActionComponent", FocusWidgetActionComponent);

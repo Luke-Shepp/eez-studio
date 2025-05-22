@@ -29,6 +29,7 @@ export const TreeRow = observer(
         toggleExpanded: (level: number, node: ITreeNode) => void;
         collapsable: boolean;
         rowPadding?: number;
+        collapseSingleChild: boolean;
     }> {
         constructor(props: any) {
             super(props);
@@ -38,23 +39,39 @@ export const TreeRow = observer(
             });
         }
 
-        onTriangleClick(event: any) {
+        onTriangleClick = (event: any) => {
             event.preventDefault();
             event.stopPropagation();
 
             this.props.selectNode(this.props.node);
             this.props.toggleExpanded(this.props.level, this.props.node);
-        }
+        };
 
-        onClick(e: React.MouseEvent<HTMLDivElement>) {
+        onClick = (e: React.MouseEvent<HTMLDivElement>) => {
             e.preventDefault();
             e.stopPropagation();
 
             this.props.selectNode(this.props.node);
-        }
+        };
 
         render() {
             let childrenRows: JSX.Element[] = [];
+
+            const collapsedChildren = [];
+            let children = this.props.node.children;
+            if (
+                !this.props.showOnlyChildren &&
+                this.props.collapseSingleChild
+            ) {
+                while (children.length == 1) {
+                    const singleChild = children[0];
+                    if (singleChild.children.length == 0) {
+                        break;
+                    }
+                    collapsedChildren.push(singleChild);
+                    children = singleChild.children;
+                }
+            }
 
             if (
                 this.props.showOnlyChildren ||
@@ -64,7 +81,7 @@ export const TreeRow = observer(
                     ? this.props.level
                     : this.props.level + 1;
 
-                this.props.node.children.forEach(child => {
+                children.forEach(child => {
                     childrenRows.push(
                         <TreeRow
                             key={child.id}
@@ -77,6 +94,7 @@ export const TreeRow = observer(
                             toggleExpanded={this.props.toggleExpanded}
                             collapsable={this.props.collapsable}
                             rowPadding={this.props.rowPadding}
+                            collapseSingleChild={this.props.collapseSingleChild}
                         />
                     );
                 });
@@ -101,6 +119,38 @@ export const TreeRow = observer(
 
                 let labelText = this.props.node.label;
 
+                if (collapsedChildren.length > 0) {
+                    labelText = (
+                        <span
+                            style={{
+                                display: "inline-flex",
+                                alignItems: "start"
+                            }}
+                        >
+                            {labelText}
+                            {collapsedChildren.map(child => (
+                                <span
+                                    key={child.id}
+                                    style={{
+                                        display: "inline-flex",
+                                        alignItems: "start"
+                                    }}
+                                >
+                                    <span
+                                        style={{
+                                            padding: "0 5px",
+                                            fontWeight: "bold"
+                                        }}
+                                    >
+                                        /
+                                    </span>
+                                    {child.label}
+                                </span>
+                            ))}
+                        </span>
+                    );
+                }
+
                 let label: JSX.Element | undefined;
                 let triangle: JSX.Element | undefined;
 
@@ -121,7 +171,7 @@ export const TreeRow = observer(
                     triangle = (
                         <span
                             className={triangleClassName}
-                            onClick={this.onTriangleClick.bind(this)}
+                            onClick={this.onTriangleClick}
                         >
                             <Icon
                                 icon="material:keyboard_arrow_right"
@@ -150,7 +200,7 @@ export const TreeRow = observer(
                             paddingLeft:
                                 this.props.level * (this.props.rowPadding ?? 20)
                         }}
-                        onClick={this.onClick.bind(this)}
+                        onClick={this.onClick}
                     >
                         {triangle}
                         {label}
@@ -190,6 +240,7 @@ export const Tree = observer(
             style?: React.CSSProperties;
             collapsable?: boolean;
             rowPadding?: number;
+            collapseSingleChild?: boolean;
         },
         {}
     > {
@@ -345,6 +396,9 @@ export const Tree = observer(
                         toggleExpanded={this.toggleExpanded}
                         collapsable={this.props.collapsable ?? true}
                         rowPadding={this.props.rowPadding}
+                        collapseSingleChild={
+                            this.props.collapseSingleChild ?? false
+                        }
                     />
                 </div>
             );

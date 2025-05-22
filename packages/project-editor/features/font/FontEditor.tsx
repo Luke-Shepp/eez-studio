@@ -38,12 +38,9 @@ import { showGenericDialog } from "project-editor/core/util";
 import { GlyphSelectFieldType } from "project-editor/features/font/GlyphSelectFieldType";
 import {
     Font,
-    getEncodings,
     Glyph,
     GlyphSource,
-    removeDuplicates,
-    requiredRangesOrSymbols,
-    validateRanges
+    onEditGlyphs
 } from "project-editor/features/font/font";
 
 import {
@@ -65,8 +62,7 @@ export const FontEditor = observer(
             makeObservable(this, {
                 onSelectGlyph: action.bound,
                 onAddGlyph: action.bound,
-                onDeleteGlyph: action.bound,
-                onEditGlyphs: action.bound
+                onDeleteGlyph: action.bound
             });
         }
 
@@ -93,7 +89,11 @@ export const FontEditor = observer(
         }
 
         componentDidMount() {
-            this.context.navigationStore.setInitialSelectedPanel(this);
+            this.context.navigationStore.mountPanel(this);
+        }
+
+        componentWillUnmount() {
+            this.context.navigationStore.unmountPanel(this);
         }
 
         onSelectGlyph(glyph: Glyph) {
@@ -130,8 +130,8 @@ export const FontEditor = observer(
                 return this.font;
             }
         }
-        cutSelection() {
-            // TODO
+        canCopy() {
+            return !!this.selectedGlyph;
         }
         copySelection() {
             const glyph = this.selectedGlyph;
@@ -139,24 +139,18 @@ export const FontEditor = observer(
                 glyph.copyToClipboard();
             }
         }
+        canPaste() {
+            return !!this.selectedGlyph;
+        }
         pasteSelection() {
             const glyph = this.selectedGlyph;
             if (glyph) {
                 glyph.pasteFromClipboard();
             }
         }
-        deleteSelection() {
-            // TODO
-        }
         onFocus = () => {
             this.context.navigationStore.setSelectedPanel(this);
         };
-
-        componentWillUnmount() {
-            if (this.context.navigationStore.selectedPanel === this) {
-                this.context.navigationStore.setSelectedPanel(undefined);
-            }
-        }
 
         onAddGlyph() {
             const projectStore = this.context;
@@ -407,104 +401,6 @@ export const FontEditor = observer(
             }
         }
 
-        async onEditGlyphs() {
-            const result = await showGenericDialog(this.context, {
-                dialogDefinition: {
-                    title: "Add or Remove Characters",
-                    fields: [
-                        {
-                            name: "ranges",
-                            type: "string",
-                            validators: [
-                                validateRanges,
-                                requiredRangesOrSymbols
-                            ],
-                            formText:
-                                "Ranges and/or characters to include. Example: 32-127,140,160-170,200,210-255"
-                        },
-                        {
-                            name: "symbols",
-                            type: "string",
-                            validators: [requiredRangesOrSymbols],
-                            formText:
-                                "List of characters to include. Example: abc01234äöüčćšđ"
-                        }
-                    ]
-                },
-                values: {
-                    ranges: this.font.lvglRanges,
-                    symbols: this.font.lvglSymbols
-                }
-            });
-
-            try {
-                let relativeFilePath = this.font.source!.filePath;
-                let absoluteFilePath =
-                    this.context.getAbsoluteFilePath(relativeFilePath);
-
-                const encodingsBeforeDeduplication = getEncodings(
-                    result.values.ranges
-                )!;
-
-                const { encodings, symbols } = removeDuplicates(
-                    encodingsBeforeDeduplication,
-                    result.values.symbols
-                );
-                result.values.symbols = symbols;
-
-                const fontProperties = await extractFont({
-                    name: this.font.name,
-                    absoluteFilePath,
-                    embeddedFontFile: this.font.embeddedFontFile,
-                    relativeFilePath,
-                    renderingEngine: "LVGL",
-                    bpp: this.font.bpp,
-                    size: this.font.source!.size!,
-                    threshold: 128,
-                    createGlyphs: true,
-                    encodings,
-                    symbols: result.values.symbols,
-                    createBlankGlyphs: false,
-                    doNotAddGlyphIfNotFound: false,
-                    lvglVersion:
-                        this.context.project.settings.general.lvglVersion,
-                    lvglInclude: this.context.project.settings.build.lvglInclude
-                });
-
-                this.context.updateObject(this.font, {
-                    lvglBinFile: fontProperties.lvglBinFile,
-                    lvglSourceFile: fontProperties.lvglSourceFile,
-                    lvglGlyphs: {
-                        encodings,
-                        symbols: result.values.symbols
-                    }
-                });
-
-                this.font.loadLvglGlyphs(this.context);
-
-                notification.info(
-                    `Font ${this.font.name} successfully modified.`
-                );
-            } catch (err) {
-                let errorMessage;
-                if (err) {
-                    if (err.message) {
-                        errorMessage = err.message;
-                    } else {
-                        errorMessage = err.toString();
-                    }
-                }
-
-                if (errorMessage) {
-                    notification.error(
-                        `Modifying ${Font.name} failed: ${errorMessage}!`
-                    );
-                } else {
-                    notification.error(`Modifying ${Font.name} failed!`);
-                }
-            }
-        }
-
         onCreateShadow = async () => {
             const result = await dialog.showOpenDialog(getCurrentWindow(), {
                 properties: ["openFile"],
@@ -648,11 +544,15 @@ export const FontEditor = observer(
             }
         };
 
-        onKeyDown = (event: any) => {
+        onKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
             if (event.ctrlKey) {
-                if (event.keyCode == "C".charCodeAt(0)) {
+                if (event.key == "c") {
+                    event.preventDefault();
+                    event.stopPropagation();
                     this.copySelection();
-                } else if (event.keyCode == "V".charCodeAt(0)) {
+                } else if (event.key == "v") {
+                    event.preventDefault();
+                    event.stopPropagation();
                     this.pasteSelection();
                 }
             }
@@ -676,7 +576,7 @@ export const FontEditor = observer(
                         onAddGlyph={this.onAddGlyph}
                         onEditGlyphs={
                             this.context.projectTypeTraits.isLVGL
-                                ? this.onEditGlyphs
+                                ? () => onEditGlyphs(this.font)
                                 : undefined
                         }
                         onDeleteGlyph={this.onDeleteGlyph}

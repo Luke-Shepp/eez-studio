@@ -50,10 +50,6 @@ import { Point, pointDistance } from "eez-studio-shared/geometry";
 
 ////////////////////////////////////////////////////////////////////////////////
 
-let objectCollapsedStore = observable.box<
-    { object: IEezObject; collapsed: Set<IEezObject> }[]
->([]);
-
 const MAX_OBJECTS_IN_COLLAPSED_STORE = 100;
 
 export const ArrayProperty = observer(
@@ -73,37 +69,39 @@ export const ArrayProperty = observer(
         get collapsed() {
             const object = this.props.objects[0];
 
-            let objectCollapsed = objectCollapsedStore
+            let objectCollapsed = this.context.objectCollapsedStore
                 .get()
                 .find(collapsed => collapsed.object == object);
 
             if (!objectCollapsed) {
-                const collapsed = new Set<IEezObject>();
+                    const collapsed = new Set<IEezObject>();
 
-                if (
-                    this.props.propertyInfo
-                        .showArrayCollapsedByDefaultInPropertyGrid == true
-                ) {
-                    if (this.value) {
-                        for (const object of this.value) {
-                            collapsed.add(object);
+                    if (
+                        this.props.propertyInfo
+                            .showArrayCollapsedByDefaultInPropertyGrid == true
+                    ) {
+                        if (this.value) {
+                            for (const object of this.value) {
+                                collapsed.add(object);
+                            }
                         }
                     }
-                }
 
-                objectCollapsed = {
-                    object,
-                    collapsed
-                };
+                    objectCollapsed = {
+                        object,
+                        collapsed
+                    };
 
-                if (
-                    objectCollapsedStore.get().length ==
-                    MAX_OBJECTS_IN_COLLAPSED_STORE
-                ) {
-                    objectCollapsedStore.get().unshift();
-                }
+                setTimeout(action(() => {
+                    if (
+                        this.context.objectCollapsedStore.get().length ==
+                        MAX_OBJECTS_IN_COLLAPSED_STORE
+                    ) {
+                        this.context.objectCollapsedStore.get().unshift();
+                    }
 
-                objectCollapsedStore.get().push(objectCollapsed);
+                    this.context.objectCollapsedStore.get().push(objectCollapsed!);
+                }), 0);
             }
 
             return objectCollapsed.collapsed;
@@ -1065,7 +1063,7 @@ const ArrayElementProperties = observer(
                             title="Add Item Before"
                         />
 
-                        <div ref={this.refHeader}>
+                        <div className="EezStudio_ArrayElementProperty_Header_ElementIndexAndLabel" ref={this.refHeader}>
                             {!this.props.propertyInfo
                                 .hideElementIndexInPropertyGrid && (
                                 <div className="element-index">
@@ -1277,7 +1275,7 @@ const ArrayElementProperty = observer(
             if (isArrayElementPropertyVisible(propertyInfo, object)) {
                 if (
                     propertyInfo.type == PropertyType.Array &&
-                    !propertyInfo.onSelect
+                    !propertyInfo.onSelect || propertyInfo.propertyGridRowComponent
                 ) {
                     return (
                         <div className={className}>

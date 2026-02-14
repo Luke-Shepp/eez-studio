@@ -203,7 +203,7 @@ export class Bitmap extends EezObject {
 
                     const project = ProjectEditor.getProject(bitmap);
 
-                    if (project.settings.general.lvglVersion == "9.0") {
+                    if (project.settings.general.lvglVersion.startsWith("9.")) {
                         return true;
                     }
 
@@ -222,7 +222,7 @@ export class Bitmap extends EezObject {
 
                     const project = ProjectEditor.getProject(bitmap);
 
-                    if (project.settings.general.lvglVersion == "9.0") {
+                    if (project.settings.general.lvglVersion.startsWith("9.")) {
                         return true;
                     }
 
@@ -339,7 +339,9 @@ export class Bitmap extends EezObject {
                     bpp: projectStore.projectTypeTraits.isLVGL
                         ? CF_TRUE_COLOR_ALPHA
                         : 32
-                }
+                },
+                modal: true,
+                backdrop: "static"
             });
 
             const bpp: number = result.values.bpp;
@@ -739,7 +741,7 @@ export async function createBitmapFromFile(
 
         return bitmap;
     } catch (err) {
-        notification.error(err);
+        notification.error(err.toString());
         return undefined;
     }
 }

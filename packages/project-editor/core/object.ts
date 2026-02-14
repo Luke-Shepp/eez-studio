@@ -99,6 +99,7 @@ export const enum ProjectType {
 export interface EnumItem {
     id: string | number;
     label?: string;
+    icon?: React.ReactNode;
 }
 
 export enum MessageType {
@@ -154,7 +155,9 @@ export type LvglActionPropertyType =
     | `widget:${string}`
     | "group"
     | "style"
-    | "image";
+    | "image"
+    | "style-property"
+    | "style-value";
 
 export interface PropertyInfo {
     name: string;
@@ -170,6 +173,7 @@ export interface PropertyInfo {
     displayValue?: (object: IEezObject) => any;
     enumItems?: EnumItem[] | ((object: IEezObject) => EnumItem[]);
     enumDisallowUndefined?: boolean;
+    enumGroupSeparator?: string;
     typeClass?: EezClass;
     referencedObjectCollectionPath?: string;
     filterReferencedObjectCollection?: (
@@ -245,7 +249,6 @@ export interface PropertyInfo {
         object: IEezObject,
         propertyInfo: PropertyInfo
     ) => string;
-    defaultImagesPath?: (projectStore: ProjectStore) => string | undefined;
     partOfNavigation?: boolean;
     fileFilters?: any;
 

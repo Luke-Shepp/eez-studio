@@ -48,6 +48,7 @@ import {
     userPropertiesProperty,
     UserProperty
 } from "project-editor/flow/user-property";
+import { ComponentGroup } from "project-editor/flow/component-group";
 
 ////////////////////////////////////////////////////////////////////////////////
 
@@ -70,6 +71,12 @@ export abstract class Flow extends EezObject {
                 name: "localVariables",
                 type: PropertyType.Array,
                 typeClass: Variable,
+                hideInPropertyGrid: true
+            },
+            {
+                name: "componentGroups",
+                type: PropertyType.Array,
+                typeClass: ComponentGroup,
                 hideInPropertyGrid: true
             },
             userPropertiesProperty
@@ -150,12 +157,17 @@ export abstract class Flow extends EezObject {
             if (!jsObject.userProperties) {
                 jsObject.userProperties = [];
             }
+
+            if (!jsObject.componentGroups) {
+                jsObject.componentGroups = [];
+            }
         }
     };
 
     components: Component[] = [];
     connectionLines: ConnectionLine[] = [];
     localVariables: Variable[] = [];
+    componentGroups: ComponentGroup[] = [];
     userProperties: UserProperty[];
 
     get userPropertiesAndLocalVariables() {
@@ -182,6 +194,7 @@ export abstract class Flow extends EezObject {
             components: observable,
             connectionLines: observable,
             localVariables: observable,
+            componentGroups: observable,
             userProperties: observable
         });
     }
@@ -236,6 +249,22 @@ export abstract class Flow extends EezObject {
                     connectionLine.output == output
             )
             .forEach(connectionLine => deleteObject(connectionLine));
+    }
+
+    removeComponentFromGroups(component: Component) {
+        for (const group of this.componentGroups) {
+            const index = group.components.indexOf(component.objID);
+            if (index !== -1) {
+                const newComponents = group.components.filter(
+                    id => id !== component.objID
+                );
+                if (newComponents.length === 0) {
+                    deleteObject(group);
+                } else {
+                    updateObject(group, { components: newComponents });
+                }
+            }
+        }
     }
 
     rerouteConnectionLinesInput(
@@ -309,6 +338,7 @@ export abstract class Flow extends EezObject {
 export class FlowFragment extends EezObject {
     components: Component[];
     connectionLines: ConnectionLine[];
+    componentGroups: ComponentGroup[];
 
     static classInfo: ClassInfo = {
         icon: (
@@ -343,6 +373,11 @@ export class FlowFragment extends EezObject {
                 name: "connectionLines",
                 type: PropertyType.Array,
                 typeClass: ConnectionLine
+            },
+            {
+                name: "componentGroups",
+                type: PropertyType.Array,
+                typeClass: ComponentGroup
             }
         ],
 
@@ -465,6 +500,12 @@ export class FlowFragment extends EezObject {
             }
         }
 
+        if (flowFragment.componentGroups.length > 0) {
+            flowFragment.componentGroups.forEach(componentGroup =>
+                projectStore.addObject(flow.componentGroups, componentGroup)
+            );
+        }
+
         if (closeCombineCommands) {
             projectStore.undoManager.setCombineCommands(false);
         }
@@ -475,6 +516,7 @@ export class FlowFragment extends EezObject {
     addObjects(flow: Flow, objects: IEezObject[]) {
         this.components = [];
         this.connectionLines = [];
+        this.componentGroups = [];
 
         const projectStore = getProjectStore(flow);
 
@@ -492,6 +534,36 @@ export class FlowFragment extends EezObject {
                 false // createNewObjectobjIDs
             );
         }
+
+        objects.forEach((object: ComponentGroup) => {
+            if (!(object instanceof ComponentGroup)) {
+                return;
+            }
+
+            let groupComponents = [];
+
+            for (let i = 0; i < object.components.length; i++) {
+                const component = flow.components.find(component => component.objID == object.components[i]);
+
+                if (component) {
+                    const clone = cloneObject(projectStore, component) as Component;
+                    this.components.push(clone);
+
+                    objIDMap.add(component.objID);
+                    groupComponents.push(component.objID);
+
+                    for (const object2 of visitObjects(object)) {
+                        if (object2 != object && object2 instanceof Component) {
+                            objIDMap.add(object2.objID);
+                        }
+                    }
+                }
+            }
+
+            const clone = cloneObject(projectStore, object) as ComponentGroup;
+            clone.components = groupComponents;
+            this.componentGroups.push(clone);
+        });
 
         objects.forEach((object: Component) => {
             if (!(object instanceof Component)) {

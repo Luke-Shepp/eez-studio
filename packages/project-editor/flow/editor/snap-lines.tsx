@@ -5,12 +5,13 @@ import { each } from "lodash";
 
 import { Point, Rect } from "eez-studio-shared/geometry";
 
-import { IEezObject, getParent, isAncestor } from "project-editor/core/object";
+import { EezObject, IEezObject, getParent, isAncestor } from "project-editor/core/object";
 import type { TreeObjectAdapter } from "project-editor/core/objectAdapter";
 
 import type { IFlowContext } from "project-editor/flow/flow-interfaces";
 import type { Component } from "project-editor/flow/component";
 import type { Flow } from "project-editor/flow/flow";
+import { ComponentGroup } from "project-editor/flow/component-group";
 import { ProjectEditor } from "project-editor/project-editor-interface";
 
 import { getObjectBoundingRect } from "project-editor/flow/editor/bounding-rects";
@@ -66,9 +67,22 @@ export interface ISnapLines {
 
 ////////////////////////////////////////////////////////////////////////////////
 
-export function findSnapLines(flowContext: IFlowContext): ISnapLines {
+export type SnapLineFilter = "all" | "groups-only";
+
+export function findSnapLines(
+    flowContext: IFlowContext,
+    filter: SnapLineFilter = "all"
+): ISnapLines {
     const selectedObjects = flowContext.viewState.selectedObjects.map(
         objectAdapter => objectAdapter.object
+    );
+
+    const anyWidgetComponentSelected = selectedObjects.find(
+        object => object instanceof ProjectEditor.WidgetClass
+    );
+
+    const anyActionComponentSelected = selectedObjects.find(
+        object => object instanceof ProjectEditor.ActionComponentClass
     );
 
     const isSelectedObject = (object: IEezObject) => {
@@ -106,6 +120,18 @@ export function findSnapLines(flowContext: IFlowContext): ISnapLines {
             childObject = parent;
         }
 
+        return false;
+    };
+
+    const hasConnectionLineToSelected = (object: IEezObject) => {
+        for (const line of (flowContext.document.flow.object as Flow).connectionLines) {
+            if (
+                isSelectedObject(line.sourceComponent) && line.targetComponent == object ||
+                isSelectedObject(line.targetComponent) && line.sourceComponent == object
+            ) {
+                return true;
+            }
+        }
         return false;
     };
 
@@ -183,43 +209,85 @@ export function findSnapLines(flowContext: IFlowContext): ISnapLines {
     }
 
     function findSnapLinesInNode(node: TreeObjectAdapter) {
-        if (
-            node.object &&
-            (node.object instanceof ProjectEditor.PageClass ||
-                node.object instanceof ProjectEditor.ComponentClass) &&
-            !isSelectedObject(node.object) &&
-            !(
-                node.object instanceof ProjectEditor.WidgetClass &&
-                (node.object.hiddenInEditor ||
-                    isHiddenBySelectWidget(flowContext, node.object))
-            )
-        ) {
-            const rect1 = getObjectBoundingRect(flowContext.viewState, node);
-            addLines(rect1, false);
+        if (!node.object) {
+            return;
+        }
 
-            if (ADD_MARGIN_RECT) {
-                const marginRect = Object.assign({}, rect1);
+        if (isSelectedObject(node.object)) {
+            return;
+        }
 
-                if (
-                    node.object instanceof ProjectEditor.PageClass ||
-                    node.object instanceof ProjectEditor.ContainerWidgetClass
-                ) {
-                    // add inner margin for page and container
-                    marginRect.left += 10;
-                    marginRect.top += 10;
-                    marginRect.width -= 20;
-                    marginRect.height -= 20;
-                    if (marginRect.width > 0 && marginRect.height > 0) {
-                        addLines(marginRect, true);
-                    }
-                } else {
-                    // add outer margin for all other widgets
-                    marginRect.left -= 10;
-                    marginRect.top -= 10;
-                    marginRect.width += 20;
-                    marginRect.height += 20;
+        // Handle ComponentGroups
+        if (node.object instanceof ComponentGroup) {
+            const group = node.object as ComponentGroup;
+            if (!selectedObjects.find(obj => group.components.indexOf((obj as EezObject).objID) >= 0)) {
+                const rect1 = getObjectBoundingRect(
+                    flowContext.viewState,
+                    node
+                );
+                addLines(rect1, false);
+            }
+            return; // Don't recurse into group children
+        }
+
+        // For groups-only filter, skip non-group objects
+        if (filter === "groups-only") {
+            each(node.children, (item: any) => findSnapLinesInNode(item));
+            return;
+        }
+
+        if (!(node.object instanceof ProjectEditor.FlowClass || node.object instanceof ProjectEditor.ComponentClass)) {
+            return;
+        }
+
+        if (node.object instanceof ProjectEditor.WidgetClass) {
+            if (node.object.hiddenInEditor) {
+                return;
+            }
+
+            if (isHiddenBySelectWidget(flowContext, node.object)) {
+                return;
+            }
+
+            if (!anyWidgetComponentSelected) {
+                if (!hasConnectionLineToSelected(node.object)) {
+                    each(node.children, (item: any) => findSnapLinesInNode(item));
+                    return;
+                }
+            }
+        }
+
+        if (node.object instanceof ProjectEditor.ActionComponentClass) {
+            if (!anyActionComponentSelected) {
+                return;
+            }
+        }
+
+        const rect1 = getObjectBoundingRect(flowContext.viewState, node);
+        addLines(rect1, false);
+
+        if (ADD_MARGIN_RECT) {
+            const marginRect = Object.assign({}, rect1);
+
+            if (
+                node.object instanceof ProjectEditor.PageClass ||
+                node.object instanceof ProjectEditor.ContainerWidgetClass
+            ) {
+                // add inner margin for page and container
+                marginRect.left += 10;
+                marginRect.top += 10;
+                marginRect.width -= 20;
+                marginRect.height -= 20;
+                if (marginRect.width > 0 && marginRect.height > 0) {
                     addLines(marginRect, true);
                 }
+            } else {
+                // add outer margin for all other widgets
+                marginRect.left -= 10;
+                marginRect.top -= 10;
+                marginRect.width += 20;
+                marginRect.height += 20;
+                addLines(marginRect, true);
             }
         }
 
@@ -339,9 +407,11 @@ export function drawSnapLinesGeneric(
 export class SnapLines {
     lines: ISnapLines;
     enabled: boolean = false;
+    filter: SnapLineFilter = "all";
 
-    find(context: IFlowContext) {
-        this.lines = findSnapLines(context);
+    find(context: IFlowContext, filter: SnapLineFilter = "all") {
+        this.filter = filter;
+        this.lines = findSnapLines(context, filter);
     }
 
     findSnapPosition(

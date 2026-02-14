@@ -38,7 +38,6 @@ import {
     getSelectorBuildCode,
     getSelectorCode
 } from "project-editor/lvgl/style-helper";
-import { getLvglCoord } from "./lvgl-versions";
 import { getThemedColor } from "project-editor/features/style/theme";
 import { isValid } from "eez-studio-shared/color";
 import type { LVGLStyle } from "./style";
@@ -529,7 +528,7 @@ export class LVGLStylesDefinition extends EezObject {
                                     .valueToNum
                                     ? propertyInfo.lvglStyleProp.valueToNum(
                                           value,
-                                          runtime
+                                          projectStore
                                       )
                                     : value;
 
@@ -550,14 +549,9 @@ export class LVGLStylesDefinition extends EezObject {
                                 .lvglStyleProp.valueToNum
                                 ? propertyInfo.lvglStyleProp.valueToNum(
                                       value,
-                                      runtime
+                                      projectStore
                                   )
                                 : value;
-
-                            const { LV_COORD_MAX } = getLvglCoord(widget);
-                            const LV_GRID_TEMPLATE_LAST = LV_COORD_MAX;
-
-                            arrValue.push(LV_GRID_TEMPLATE_LAST);
 
                             runtime.wasm._lvglObjSetLocalStylePropPtr(
                                 obj,
@@ -596,6 +590,24 @@ export class LVGLStylesDefinition extends EezObject {
                                             propertyInfo.lvglStyleProp.code
                                         ),
                                         bitmapPtr,
+                                        selectorCode
+                                    );
+                                }
+                            }
+                        } else if (propertyInfo.type == PropertyType.String) {
+                            if (value) {
+                                // For anim property
+                                let { setDelay, setRepeatDelay, setRepeatCount, delay, repeatDelay, repeatCount } = extractAnimProperties(value);
+
+                                if (setDelay || setRepeatDelay || setRepeatCount) {
+                                    const animPtr = runtime.wasm._lvglCreateAnim(setDelay, delay, setRepeatDelay, repeatDelay, setRepeatCount, repeatCount);
+                                    runtime.pointers.push(animPtr);
+                                    runtime.wasm._lvglObjSetLocalStylePropPtr(
+                                        obj,
+                                        runtime.getLvglStylePropCode(
+                                            propertyInfo.lvglStyleProp.code
+                                        ),
+                                        animPtr,
                                         selectorCode
                                     );
                                 }
@@ -716,12 +728,6 @@ export class LVGLStylesDefinition extends EezObject {
                                 ? propertyInfo.lvglStyleProp.valueBuild(value)
                                 : "";
 
-                            if (dsc) {
-                                dsc += ", ";
-                            }
-
-                            dsc += "LV_GRID_TEMPLATE_LAST";
-
                             build.blockStart("{");
                             build.line(`static lv_coord_t dsc[] = {${dsc}};`);
 
@@ -752,6 +758,21 @@ export class LVGLStylesDefinition extends EezObject {
                                     value
                                 )}, ${selectorCode});`
                             );
+                        } else if (propertyInfo.type == PropertyType.String) {
+                            if (value) {
+                                // For anim property
+                                let { setDelay, setRepeatDelay, setRepeatCount, delay, repeatDelay, repeatCount } = extractAnimProperties(value);
+
+                                if (
+                                    setDelay ||
+                                    setRepeatDelay ||
+                                    setRepeatCount
+                                ) {
+                                    build.line(
+                                        `lv_obj_set_style_anim(obj, ${build.createAnimation(setDelay, setRepeatDelay, setRepeatCount, delay, repeatDelay, repeatCount)}, ${selectorCode});`
+                                    );
+                                }
+                            }
                         }
                     }
                 );
@@ -843,12 +864,6 @@ export class LVGLStylesDefinition extends EezObject {
                         ? propertyInfo.lvglStyleProp.valueBuild(value)
                         : "";
 
-                    if (dsc) {
-                        dsc += ", ";
-                    }
-
-                    dsc += "LV_GRID_TEMPLATE_LAST";
-
                     build.blockStart("{");
                     build.line(`static lv_coord_t dsc[] = {${dsc}};`);
 
@@ -876,6 +891,21 @@ export class LVGLStylesDefinition extends EezObject {
                             propertyInfo.name
                         )}(style, ${build.getImageAccessor(value)});`
                     );
+                } else if (propertyInfo.type == PropertyType.String) {
+                    if (value) {
+                        // For anim property
+                        let { setDelay, setRepeatDelay, setRepeatCount, delay, repeatDelay, repeatCount } = extractAnimProperties(value);
+
+                        if (
+                            setDelay ||
+                            setRepeatDelay ||
+                            setRepeatCount
+                        ) {
+                            build.line(
+                                `lv_style_set_anim(style, ${build.createAnimation(setDelay, setRepeatDelay, setRepeatCount, delay, repeatDelay, repeatCount)});`
+                            );
+                        }
+                    }
                 }
             }
         );
@@ -894,4 +924,48 @@ export class LVGLStylesDefinition extends EezObject {
 
 registerClass("LVGLStylesDefinition", LVGLStylesDefinition);
 
+
+export function extractAnimProperties(value: any) {
+    let setDelay = false;
+    let delay = 0;
+
+    let setRepeatDelay = false;
+    let repeatDelay = 0;
+
+    let setRepeatCount = false;
+    let repeatCount = 0;
+
+    const props = value.split(",");
+    for (let i = 0; i < props.length; i++) {
+        let [propName, propValueStr] = props[i].split("=");
+        if (!propName) {
+            continue;
+        }
+        propName = propName.trim();
+        if (!propValueStr) {
+            continue;
+        }
+        propValueStr = propValueStr.trim();
+        if (propName == "delay") {
+            let propValue = Number(propValueStr);
+            if (Number.isInteger(propValue)) {
+                setDelay = true;
+                delay = propValue;
+            }
+        } else if (propName == "repeat_delay") {
+            let propValue = Number(propValueStr);
+            if (Number.isInteger(propValue)) {
+                setRepeatDelay = true;
+                repeatDelay = propValue;
+            }
+        } else if (propName == "repeat_count") {
+            let propValue = Number(propValueStr);
+            if (Number.isInteger(propValue)) {
+                setRepeatCount = true;
+                repeatCount = propValue;
+            }
+        }
+    }
+    return { setDelay, setRepeatDelay, setRepeatCount, delay, repeatDelay, repeatCount };
+}
 ////////////////////////////////////////////////////////////////////////////////

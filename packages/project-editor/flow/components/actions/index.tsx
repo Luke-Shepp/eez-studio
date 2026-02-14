@@ -1118,6 +1118,7 @@ export class SwitchActionComponent extends ActionComponent {
                     <pre key={getId(test)}>
                         {`#${i + 1} `}
                         {test.condition}
+                        {test.outputValue ? <><RightArrow />{test.outputValue}</> : null}
                     </pre>
                 ))}
             </div>
@@ -3950,6 +3951,18 @@ export class SetColorThemeActionComponent extends ActionComponent {
             ...super.getOutputs()
         ];
     }
+
+    getBody(flowContext: IFlowContext): React.ReactNode {
+        if (!this.theme) {
+            return null;
+        }
+
+        return (
+            <div className="body">
+                <pre>{this.theme}</pre>
+            </div>
+        );
+    }
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -4254,7 +4267,8 @@ export class CommentActionComponent extends ActionComponent {
     static classInfo = makeDerivedClassInfo(ActionComponent.classInfo, {
         flowComponentId: COMPONENT_TYPE_COMMENT_ACTION,
 
-        label: (object: CommentActionComponent) => object.description,
+        label: (object: CommentActionComponent) => 
+            object.description || "Comment",
 
         properties: [
             {

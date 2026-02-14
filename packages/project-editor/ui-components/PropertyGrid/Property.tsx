@@ -3,6 +3,7 @@ import { observable, action, runInAction, autorun, makeObservable } from "mobx";
 import { observer } from "mobx-react";
 import classNames from "classnames";
 import { dialog, getCurrentWindow } from "@electron/remote";
+import { shell } from "electron";
 
 import { guid } from "eez-studio-shared/guid";
 import { humanize } from "eez-studio-shared/string";
@@ -49,6 +50,7 @@ import { ImageProperty } from "./ImageProperty";
 
 import { General } from "project-editor/project/project";
 import { UniqueValueInput } from "./UniqueValueInput";
+import { IconEnumDropdown } from "./IconEnumDropdown";
 
 ////////////////////////////////////////////////////////////////////////////////
 
@@ -520,9 +522,8 @@ export const Property = observer(
                     />
                 );
             } else if (propertyInfo.type === PropertyType.MultilineText) {
+                const formText = getFormText(this.props);
                 if (!readOnly && isOnSelectAvailable) {
-                    const formText = getFormText(this.props);
-
                     return (
                         <div style={{ width: "100%" }}>
                             <div
@@ -561,16 +562,21 @@ export const Property = observer(
                     );
                 } else {
                     return (
-                        <textarea
-                            ref={(ref: any) => (this.textarea = ref)}
-                            className={classNames("form-control", {
-                                pre: propertyInfo.monospaceFont
-                            })}
-                            value={this._value || ""}
-                            onChange={this.onChange}
-                            style={{ resize: "none", overflowY: "hidden" }}
-                            readOnly={readOnly || propertyInfo.computed}
-                        />
+                        <div style={{ width: "100%" }}>
+                            <textarea
+                                ref={(ref: any) => (this.textarea = ref)}
+                                className={classNames("form-control", {
+                                    pre: propertyInfo.monospaceFont
+                                })}
+                                value={this._value || ""}
+                                onChange={this.onChange}
+                                style={{ resize: "none", overflowY: "hidden" }}
+                                readOnly={readOnly || propertyInfo.computed}
+                            />
+                            {formText && (
+                                    <div className="form-text">{formText}</div>
+                                )}
+                        </div>
                     );
                 }
             } else if (propertyInfo.type === PropertyType.JSON) {
@@ -685,16 +691,77 @@ export const Property = observer(
                         />
                     );
                 } else {
-                    let options: JSX.Element[];
+                    let options: JSX.Element[] = [];
 
-                    options = enumItems.map(enumItem => {
-                        const id = enumItem.id.toString();
-                        return (
-                            <option key={id} value={id}>
-                                {enumItem.label || humanize(id)}
-                            </option>
-                        );
-                    });
+                    const addEnumItemsToOptions = (enumItems: EnumItem[], options: JSX.Element[], enumGroupSeparator?: string) => {
+                        enumItems.forEach(enumItem => {
+                            const id = enumItem.id.toString();
+                            let label;
+                            
+                            if (enumItem.label) {
+                                label = enumItem.label;
+                                if (enumGroupSeparator) {
+                                    const parts = label.split(
+                                        propertyInfo.enumGroupSeparator!
+                                    );
+                                    label = parts[1];
+                                }
+                            } else {
+                                label = humanize(id);
+                            }
+                            
+                            options.push(
+                                <option key={id} value={id}>
+                                    {label}
+                                </option>
+                            );
+                        });
+                    };
+
+                    if (propertyInfo.enumGroupSeparator) {
+                        // Group enum items
+                        const groups: {
+                            label: string;
+                            items: EnumItem[];
+                        }[] = [];
+
+                        enumItems.forEach(enumItem => {
+                            const label = enumItem.label || humanize(enumItem.id);
+                            const parts = label.split(
+                                propertyInfo.enumGroupSeparator!
+                            );
+
+                            let group = groups.find(g => g.label == parts[0]);
+                            if (!group) {
+                                group = { label: parts[0], items: [] };
+                                if (parts[0] !== "") {
+                                    groups.push(group);
+                                } else {
+                                    groups.unshift(group);
+                                }
+                            }
+
+                            group.items.push(enumItem);
+                        });
+
+
+                        // Add groups to options
+                        groups.forEach(group => {
+                            if (group.label !== "") {
+                                let groupOptions: JSX.Element[] = [];
+                                addEnumItemsToOptions(group.items, groupOptions, propertyInfo.enumGroupSeparator)
+                                options.push(
+                                    <optgroup key={group.label} label={group.label}>
+                                        {groupOptions}
+                                    </optgroup>
+                                );
+                            } else {
+                                addEnumItemsToOptions(group.items, options);
+                            }
+                        });
+                    } else {
+                        addEnumItemsToOptions(enumItems, options);
+                    }
 
                     const value = this._value !== undefined ? this._value : "";
 
@@ -712,6 +779,22 @@ export const Property = observer(
 
                     if (!propertyInfo.enumDisallowUndefined && value !== "") {
                         options.unshift(<option key="__empty" value="" />);
+                    }
+
+                    const allHaveIcons =
+                        enumItems.length > 0 &&
+                        enumItems.every(item => item.icon);
+
+                    if (allHaveIcons) {
+                        return (
+                            <IconEnumDropdown
+                                enumItems={enumItems}
+                                value={value}
+                                onChange={(newValue: any) => {
+                                    this.changeValue(newValue);
+                                }}
+                            />
+                        );
                     }
 
                     return (
@@ -1004,12 +1087,14 @@ export const Property = observer(
                                                     {
                                                         properties: [
                                                             "openDirectory"
-                                                        ]
+                                                        ],
+                                                        defaultPath: this.context.uiStateStore.openDialogDefaultPath || this.context.filePath
                                                     }
                                                 );
 
                                             const filePaths = result.filePaths;
                                             if (filePaths && filePaths[0]) {
+                                                this.context.uiStateStore.openDialogDefaultPath = result.filePaths[0];
                                                 this.changeValue(
                                                     this.context.getFolderPathRelativeToProjectPath(
                                                         filePaths[0]
@@ -1026,6 +1111,39 @@ export const Property = observer(
                                 >
                                     &hellip;
                                 </button>
+                                {this._value && (
+                                    <button
+                                        className="btn btn-secondary"
+                                        type="button"
+                                        title="Open in system explorer"
+                                        onClick={async () => {
+                                            if (
+                                                this.context.filePath &&
+                                                this._value
+                                            ) {
+                                                const absolutePath =
+                                                    this.context.getAbsoluteFilePath(
+                                                        this._value
+                                                    );
+                                                try {
+                                                    await shell.openPath(
+                                                        absolutePath
+                                                    );
+                                                } catch (err) {
+                                                    info(
+                                                        "Error opening folder",
+                                                        `Could not open folder: ${err}`
+                                                    );
+                                                }
+                                            }
+                                        }}
+                                    >
+                                        <Icon
+                                            icon="material:folder_open"
+                                            size={14}
+                                        />
+                                    </button>
+                                )}
                             </>
                         )}
                     </div>
@@ -1070,12 +1188,14 @@ export const Property = observer(
                                                             "openFile"
                                                         ],
                                                         filters:
-                                                            propertyInfo.fileFilters
+                                                            propertyInfo.fileFilters,
+                                                        defaultPath: this.context.uiStateStore.openDialogDefaultPath || this.context.filePath
                                                     }
                                                 );
 
                                             const filePaths = result.filePaths;
                                             if (filePaths && filePaths[0]) {
+                                                this.context.uiStateStore.openDialogDefaultPath = result.filePaths[0];
                                                 this.changeValue(
                                                     this.context.getFolderPathRelativeToProjectPath(
                                                         filePaths[0]

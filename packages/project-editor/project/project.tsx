@@ -136,7 +136,9 @@ export class BuildConfiguration extends EezObject {
                         }
                     ]
                 },
-                values: {}
+                values: {},
+                modal: true,
+                backdrop: "static"
             });
 
             const buildConfigurationProperties: Partial<BuildConfiguration> = {
@@ -281,6 +283,7 @@ export class Build extends EezObject {
     imageExportMode: "source" | "binary";
     fontExportMode: "source" | "binary";
     fileSystemPath: string;
+    useDockerDesktop: boolean;
 
     static classInfo: ClassInfo = {
         label: () => "Build",
@@ -365,6 +368,13 @@ export class Build extends EezObject {
                 disabled: isNotLVGLProject
             },
             {
+                name: "useDockerDesktop",
+                displayName: "Use Docker Desktop for full simulator",
+                checkboxStyleSwitch: true,
+                type: PropertyType.Boolean,
+                disabled: isNotLVGLProject
+            },
+            {
                 name: "generateSourceCodeForEezFramework",
                 displayName:
                     "Generate source code for EEZ Flow engine (eez-framework)",
@@ -430,6 +440,10 @@ export class Build extends EezObject {
                 jsObject.screensLifetimeSupport = false;
             }
 
+            if (jsObject.useDockerDesktop == undefined) {
+                jsObject.useDockerDesktop = true;
+            }
+
             if ((jsObject as any).fontsAreStoredInFilesystem === true) {
                 jsObject.fontExportMode = "binary";
             }
@@ -480,6 +494,7 @@ export class Build extends EezObject {
             fileSystemPath: observable,
             lvglInclude: observable,
             screensLifetimeSupport: observable,
+            useDockerDesktop: observable,
             generateSourceCodeForEezFramework: observable,
             compressFlowDefinition: observable,
             executionQueueSize: observable,
@@ -770,11 +785,13 @@ export const PROJECT_TYPE_NAMES = {
     [ProjectType.IEXT]: "IEXT"
 };
 
+export type LVGLVersion = "8.4.0" | "9.2.2" | "9.3.0" | "9.4.0";
+
 export class General extends EezObject {
     projectVersion: ProjectVersion = "v3";
     projectType: ProjectType;
     commandsProtocol: CommandsProtocolType;
-    lvglVersion: "8.3" | "9.0";
+    lvglVersion: LVGLVersion;
     commandsDocFolder?: string;
     masterProject: string;
     extensions: ExtensionDirective[];
@@ -803,6 +820,8 @@ export class General extends EezObject {
 
     hiddenWidgetLines: "visible" | "dimmed" | "hidden";
     dimmedLinesOpacity: number;
+
+    embedFonts: boolean;
 
     static classInfo: ClassInfo = {
         label: () => "General",
@@ -889,8 +908,10 @@ export class General extends EezObject {
                 displayName: "LVGL version",
                 type: PropertyType.Enum,
                 enumItems: [
-                    { id: "8.3", label: "8.x" },
-                    { id: "9.0", label: "9.x" }
+                    { id: "8.4.0", label: "8.4.0" },
+                    { id: "9.2.2", label: "9.2.2" },
+                    { id: "9.3.0", label: "9.3.0" },
+                    { id: "9.4.0", label: "9.4.0" }
                 ],
                 enumDisallowUndefined: true,
                 disabled: (general: General) =>
@@ -918,7 +939,8 @@ export class General extends EezObject {
                 disabled: (general: General) => {
                     return !(
                         general.projectType == ProjectType.RESOURCE ||
-                        general.projectType == ProjectType.APPLET
+                        general.projectType == ProjectType.APPLET ||
+                        general.projectType == ProjectType.FIRMWARE
                     );
                 }
             },
@@ -1036,6 +1058,15 @@ export class General extends EezObject {
                             general.projectType != ProjectType.DASHBOARD) ||
                         general.hiddenWidgetLines != "dimmed"
                     );
+                }
+            },
+            {
+                name: "embedFonts",
+                displayName: "Embed fonts inside eez-project file",
+                type: PropertyType.Boolean,
+                checkboxStyleSwitch: true,
+                disabled: (general: General) => {
+                    return general.projectType != ProjectType.LVGL;
                 }
             },
             {
@@ -1183,7 +1214,12 @@ export class General extends EezObject {
 
             if (jsObject.projectType == "lvgl") {
                 if (jsObject.lvglVersion == undefined) {
-                    jsObject.lvglVersion = "8.3";
+                    jsObject.lvglVersion = "8.4.0";
+                }
+                if (jsObject.lvglVersion == "8.3") {
+                    jsObject.lvglVersion = "8.4.0";
+                } else if (jsObject.lvglVersion == "9.0") {
+                    jsObject.lvglVersion = "9.2.2";
                 }
             }
 
@@ -1234,6 +1270,10 @@ export class General extends EezObject {
             if (jsObject.dimmedLinesOpacity == undefined) {
                 jsObject.dimmedLinesOpacity = "20";
             }
+
+            if (jsObject.embedFonts == undefined) {
+                jsObject.embedFonts = true;
+            }
         },
 
         updateObjectValueHook: (general: General, values: Partial<General>) => {
@@ -1281,7 +1321,8 @@ export class General extends EezObject {
             resourceFiles: observable,
             commandsProtocol: observable,
             hiddenWidgetLines: observable,
-            dimmedLinesOpacity: observable
+            dimmedLinesOpacity: observable,
+            embedFonts: observable
         });
     }
 }
@@ -1314,8 +1355,10 @@ export class Settings extends EezObject {
                 ) => {
                     const projectStore = getProjectStore(object);
                     return (
-                        !projectStore.projectTypeTraits.isDashboard &&
-                        !projectStore.masterProjectEnabled
+                        (!projectStore.projectTypeTraits.isDashboard &&
+                            !projectStore.masterProjectEnabled) ||
+                        projectStore.project.settings.general.projectType ==
+                            ProjectType.FIRMWARE
                     );
                 }
             }
@@ -1836,6 +1879,17 @@ export class Project extends EezObject {
             }
         }
 
+        if (this.masterProject) {
+            if (this.masterProject.variables) {
+                for (const variable of this.masterProject.variables
+                    .globalVariables) {
+                    if (variable.id != undefined) {
+                        allVariables.push(variable);
+                    }
+                }
+            }
+        }
+
         return allVariables;
     }
 
@@ -1848,6 +1902,16 @@ export class Project extends EezObject {
                 allVariables.push(
                     ...importDirective.project.variables.globalVariables
                 );
+            }
+        }
+        if (this.masterProject) {
+            if (this.masterProject.variables) {
+                for (const variable of this.masterProject.variables
+                    .globalVariables) {
+                    if (variable.id != undefined) {
+                        allVariables.push(variable);
+                    }
+                }
             }
         }
         return allVariables;

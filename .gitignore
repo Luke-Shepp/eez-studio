@@ -30,17 +30,8 @@ tools/freetype-tools/FreeType-Emscripten
 bundle-meta.json
 circular.txt
 
-wasm/eez-runtime/build
-!packages/project-editor/flow/runtime/eez_runtime.js
-
-wasm/lvgl-runtime/v8.3/build
-!packages/project-editor/flow/runtime/lvgl_runtime_v8.3.js
-
-wasm/lvgl-runtime/v9.0/build
-!packages/project-editor/flow/runtime/lvgl_runtime_v9.0.js
-
-wasm/lz4/build
-!packages/project-editor/flow/runtime/lz4.js
+!packages/project-editor/flow/runtime/wasm/**
+!packages/project-editor/lvgl/lv_img_conv_v9/**
 
 npm-module/packages
 npm-module/libs
@@ -51,3 +42,9 @@ tools/eez-framework-amalgamation/build
 tools/lvgl-api/build
 
 .env
+
+/libs/docker-build/output/**
+
+/test/**
+
+.claude

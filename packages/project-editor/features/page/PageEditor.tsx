@@ -66,7 +66,8 @@ class PageTreeObjectAdapter extends TreeObjectAdapter {
 
         return [
             ...this.page.components.map(child => this.transformer(child)),
-            ...this.page.connectionLines.map(child => this.transformer(child))
+            ...this.page.connectionLines.map(child => this.transformer(child)),
+            ...this.page.componentGroups.map(child => this.transformer(child))
         ];
     }
 }
@@ -132,7 +133,7 @@ export class PageTabState extends FlowTabState {
 
     get frontFace() {
         return this.isRuntime
-            ? this.projectStore.uiStateStore?.pageRuntimeFrontFace ?? true
+            ? (this.projectStore.uiStateStore?.pageRuntimeFrontFace ?? true)
             : this.projectStore.uiStateStore.pageEditorFrontFace;
     }
 
@@ -203,8 +204,12 @@ export class PageTabState extends FlowTabState {
             return;
         }
 
-        if (state.selection) {
-            this.widgetContainer.loadState(state.selection);
+        if (state.selectionFront) {
+            this.widgetContainerFrontFace.loadState(state.selectionFront);
+        }
+
+        if (state.selectionBack) {
+            this.widgetContainerBackFace.loadState(state.selectionBack);
         }
 
         if (state.transform && state.transform.translate) {
@@ -215,7 +220,7 @@ export class PageTabState extends FlowTabState {
                 },
                 scale: this.projectStore.uiStateStore.globalFlowZoom
                     ? this.projectStore.uiStateStore.flowZoom
-                    : state.transform.scale ?? 1
+                    : (state.transform.scale ?? 1)
             });
         }
 
@@ -230,7 +235,8 @@ export class PageTabState extends FlowTabState {
         }
 
         const state = {
-            selection: this.widgetContainer.saveState(),
+            selectionFront: this.widgetContainerFrontFace.saveState(),
+            selectionBack: this.widgetContainerBackFace.saveState(),
             transform: {
                 translate: {
                     x: this.transform.translate.x,

@@ -1,3 +1,4 @@
+import fs from "fs"
 import {
     IReactionDisposer,
     autorun,
@@ -17,7 +18,6 @@ import type { Font } from "project-editor/features/font/font";
 import {
     createObject,
     getAncestorOfType,
-    getClassInfo,
     getObjectPathAsString,
     getProjectStore
 } from "project-editor/store";
@@ -28,9 +28,11 @@ import type {
     LVGLWidget
 } from "project-editor/lvgl/widgets";
 import {
+    LVGLVersion,
     Project,
     ProjectType,
     findBitmap,
+    findFont,
     findFontByVarName
 } from "project-editor/project/project";
 import {
@@ -43,7 +45,6 @@ import type { PageTabState } from "project-editor/features/page/PageEditor";
 import {
     getLvglBitmapPtr,
     getLvglEvents,
-    getLvglFlagCodes,
     getLvglStylePropCode,
     getLvglWasmFlowRuntimeConstructor
 } from "project-editor/lvgl/lvgl-versions";
@@ -77,52 +78,79 @@ interface LVGLCreateContext {
 }
 
 export abstract class LVGLPageRuntime {
-    lvglVersion: "8.3" | "9.0";
+    lvglVersion: LVGLVersion;
     wasm: IWasmFlowRuntime;
-    toLVGLCode = new SimulatorLVGLCode(this, LVGL_CONSTANTS_ALL);
+    toLVGLCode: SimulatorLVGLCode;
     isMounted: boolean = false;
-    bitmapsCache = new Map<
+    bitmapsCache: Map<
         Bitmap,
         {
             imageElement: HTMLImageElement;
             bitmapPtr: number;
         }
-    >();
-    fontsCache = new Map<
+    >;
+    fontsCache: Map<
         Font,
         {
             lvglBinFile: string;
             fontPtr: number;
         }
-    >();
-    fontAddressToFont = new Map<number, Font>();
+    >;
+    fontAddressToFont: Map<number, Font>;
     lvglCreateContext: LVGLCreateContext;
-    tick_value_change_obj: number = 0;
-    widgetIndexes: number[] = [];
-    pointers: number[] = [];
-    oldStyleObjMap = new Map<LVGLStyle, LVGLStyleObjects>();
-    styleObjMap = new Map<LVGLStyle, LVGLStyleObjects>();
-    themeIndex: number = 0;
+    tick_value_change_obj: number;
+    widgetIndexes: number[];
+    pointers: number[];
+    oldStyleObjMap: Map<LVGLStyle, LVGLStyleObjects>;
+    styleObjMap: Map<LVGLStyle, LVGLStyleObjects>;
+    themeIndex: number;
     changeColorCallbacks: {
         page: Page | undefined;
         callback: () => void;
-    }[] = [];
-    stringLiterals = new Map<string, number>();
-    postCreateCallbacks: (() => void)[] = [];
+    }[];
+    stringLiterals: Map<string, number>;
+    postCreateCallbacks: (() => void)[];
+    buttonMatrixBuffers: {
+        mapBuffer: number;
+        mapArray: Uint32Array;
+        ctrlMapBuffer: number;
+    }[];
+    _isInsideUserWidget: number;
 
     constructor(public page: Page) {
         this.lvglVersion = this.project.settings.general.lvglVersion;
 
-        this.lvglCreateContext = {
-            page,
-            pageIndex: 0,
-            flowState: 0
-        };
+        this.reset();
 
         makeObservable(this, {
             projectStore: computed,
             project: computed
         });
+    }
+
+    reset() {
+        this.wasm = undefined as any;
+        this.toLVGLCode = new SimulatorLVGLCode(this, LVGL_CONSTANTS_ALL);
+        this.isMounted = false;
+        this.bitmapsCache = new Map();
+        this.fontsCache = new Map();
+        this.fontAddressToFont = new Map();
+        this.lvglCreateContext = {
+            page: this.page,
+            pageIndex: 0,
+            flowState: 0
+        };        
+        this.tick_value_change_obj = 0;
+        this.widgetIndexes = [];
+        this.pointers = [];
+        this.oldStyleObjMap = new Map();
+        this.styleObjMap = new Map();
+        this.themeIndex = 0;
+        this.changeColorCallbacks = [];
+        this.stringLiterals = new Map();
+        this.postCreateCallbacks = [];
+        this.buttonMatrixBuffers = [];
+        this._isInsideUserWidget = 0;
     }
 
     get projectStore() {
@@ -134,7 +162,16 @@ export abstract class LVGLPageRuntime {
     }
 
     get isV9() {
-        return this.lvglVersion == "9.0";
+        return this.lvglVersion.startsWith("9.");
+    }
+
+    isLVGLVersion(prefixes: string[]): boolean {
+        for (const prefix of prefixes) {
+            if (this.lvglVersion.startsWith(prefix)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     abstract get isEditor(): boolean;
@@ -142,13 +179,17 @@ export abstract class LVGLPageRuntime {
     abstract mount(): void;
     abstract unmount(): void;
 
-    beginUserWidget(widget: LVGLUserWidgetWidget) {}
-
-    get isInsideUserWidget() {
-        return false;
+    beginUserWidget(widget: LVGLUserWidgetWidget) {
+        this._isInsideUserWidget++;
     }
 
-    endUserWidget() {}
+    get isInsideUserWidget() {
+        return this._isInsideUserWidget > 0;
+    }
+
+    endUserWidget() {
+        this._isInsideUserWidget--;
+    }
 
     getWidgetIndex(object: LVGLWidget | Page) {
         return 0;
@@ -244,77 +285,143 @@ export abstract class LVGLPageRuntime {
         return cachedBitmap.bitmapPtr;
     }
 
+    getFontPtrByName(fontName: string) {
+        if (fontName.startsWith("MONTSERRAT_")) {
+            const fontNamePtr = this.wasm.stringToNewUTF8(fontName);
+            const fontPtr = this.wasm._lvglGetBuiltinFontPtr(fontNamePtr);
+            this.wasm._free(fontNamePtr);
+            return fontPtr;
+        }
+
+        const font = findFont(this.project, fontName);
+        
+        if (!font) {
+            return 0;
+        }
+        
+        return this.getFontPtr(font);
+    }
+
     getFontPtr(font: Font) {
-        let cashedFont = this.fontsCache.get(font);
-        if (!cashedFont || cashedFont.lvglBinFile != font.lvglBinFile) {
-            if (cashedFont) {
-                this.wasm._lvglFreeFont(cashedFont.fontPtr);
-                this.fontsCache.delete(font);
-                this.fontAddressToFont.delete(cashedFont.fontPtr);
-            }
-
-            const lvglBinFile = font.lvglBinFile;
-            if (!lvglBinFile) {
-                return 0;
-            }
-
-            const bin = Buffer.from(lvglBinFile, "base64");
-
-            const fontMemPtr = this.wasm._malloc(bin.length);
-            if (!fontMemPtr) {
-                return 0;
-            }
-            for (let i = 0; i < bin.length; i++) {
-                this.wasm.HEAP8[fontMemPtr + i] = bin[i];
-            }
-
-            const fontPathStr = this.wasm.allocateUTF8("M:" + fontMemPtr);
-
-            let fallbackUserFont = 0;
-            let fallbackBuiltinFont = -1;
-            if (font.lvglFallbackFont) {
-                if (font.lvglFallbackFont.startsWith("ui_font_")) {
-                    const fallbackFont = findFontByVarName(
-                        this.project,
-                        font.lvglFallbackFont
-                    );
-
-                    if (fallbackFont) {
-                        fallbackUserFont = this.getFontPtr(fallbackFont);
+        try {
+            let cashedFont;
+            
+            if (!font.lvglUseFreeType) {
+                cashedFont = this.fontsCache.get(font);
+                if (!cashedFont || cashedFont.lvglBinFile != font.lvglBinFile) {
+                    if (cashedFont) {
+                        this.wasm._lvglFreeFont(cashedFont.fontPtr);
+                        this.fontsCache.delete(font);
+                        this.fontAddressToFont.delete(cashedFont.fontPtr);
                     }
-                } else if (font.lvglFallbackFont.startsWith("lv_font_")) {
-                    fallbackBuiltinFont = BUILT_IN_FONTS.indexOf(
-                        font.lvglFallbackFont
-                            .slice("lv_font_".length)
-                            .toUpperCase()
+
+                    const lvglBinFile = font.lvglBinFile;
+                    if (lvglBinFile) {
+                        const bin = Buffer.from(lvglBinFile, "base64");
+
+                        const fontMemPtr = this.wasm._malloc(bin.length);
+                        if (!fontMemPtr) {
+                            return 0;
+                        }
+                        for (let i = 0; i < bin.length; i++) {
+                            this.wasm.HEAP8[fontMemPtr + i] = bin[i];
+                        }
+
+                        const fontPathStr = this.wasm.stringToNewUTF8("M:" + fontMemPtr);
+
+                        let fallbackUserFont = 0;
+                        let fallbackBuiltinFont = -1;
+                        if (font.lvglFallbackFont) {
+                            if (font.lvglFallbackFont.startsWith("ui_font_")) {
+                                const fallbackFont = findFontByVarName(
+                                    this.project,
+                                    font.lvglFallbackFont
+                                );
+
+                                if (fallbackFont) {
+                                    fallbackUserFont = this.getFontPtr(fallbackFont);
+                                }
+                            } else if (font.lvglFallbackFont.startsWith("lv_font_")) {
+                                fallbackBuiltinFont = BUILT_IN_FONTS.indexOf(
+                                    font.lvglFallbackFont
+                                        .slice("lv_font_".length)
+                                        .toUpperCase()
+                                );
+                            }
+                        }
+
+                        let fontPtr = this.wasm._lvglLoadFont(
+                            fontPathStr,
+                            fallbackUserFont,
+                            fallbackBuiltinFont
+                        );
+
+                        this.wasm._free(fontPathStr);
+
+                        this.wasm._free(fontMemPtr);
+
+                        cashedFont = {
+                            lvglBinFile,
+                            fontPtr
+                        };
+
+                        this.fontsCache.set(font, cashedFont);
+                        this.fontAddressToFont.set(fontPtr, font);
+                    }
+                }
+            } else {
+                cashedFont = this.fontsCache.get(font);
+
+                let fontSize = font.source!.size || 16;
+                let lvglBinFile = `fontSize=${fontSize};renderMode=${font.lvglFreeTypeRenderMode};style=${font.lvglFreeTypeStyle}`;
+
+                if (!cashedFont || cashedFont.lvglBinFile != lvglBinFile) {
+                    // read font file from font.source.filePath to Uint8Array variable using fs.readFileSync code
+                    const fontFileBuffer = fs.readFileSync( this.project._store.getAbsoluteFilePath(font.source!.filePath));
+                    const fontFileUint8Array = new Uint8Array(fontFileBuffer);
+                    
+                    const fsFilePath = `/runtime_font_${font.name}_${fontSize}.ttf`;
+
+                    this.wasm.FS.writeFile(fsFilePath, fontFileUint8Array);
+
+                    const renderMode: number =
+                        font.lvglFreeTypeRenderMode == "OUTLINE" ? 1 : 0;
+                    
+                    const style: number = 
+                        font.lvglFreeTypeStyle == "BOLD" ? 1 << 1 : 
+                        font.lvglFreeTypeStyle == "ITALIC" ? 1 << 0 :
+                        font.lvglFreeTypeStyle == "BOLD_ITALIC" ? (1 << 1) | (1 << 0) : 0;
+
+                    const fontPtr = this.wasm._lvglCreateFreeTypeFont(
+                        this.wasm.stringToNewUTF8(fsFilePath), 
+                        fontSize,
+                        renderMode,
+                        style
                     );
+
+                    cashedFont = {
+                        lvglBinFile,
+                        fontPtr
+                    };
+
+                    this.fontsCache.set(font, cashedFont);
+                    this.fontAddressToFont.set(fontPtr, font);
                 }
             }
 
-            let fontPtr = this.wasm._lvglLoadFont(
-                fontPathStr,
-                fallbackUserFont,
-                fallbackBuiltinFont
-            );
+            if (cashedFont) {
+                return cashedFont.fontPtr;
+            }
 
-            this.wasm._free(fontPathStr);
-
-            this.wasm._free(fontMemPtr);
-
-            cashedFont = {
-                lvglBinFile,
-                fontPtr
-            };
-
-            this.fontsCache.set(font, cashedFont);
-            this.fontAddressToFont.set(fontPtr, font);
+            return 0;
+        } catch (err) {
+            console.error("Error in getFontPtr:", err);
+            return 0;
         }
-
-        return cashedFont.fontPtr;
     }
 
     allocateUTF8(str: string, free: boolean) {
-        const stringPtr = this.wasm.allocateUTF8(str);
+        const stringPtr = this.wasm.stringToNewUTF8(str);
         if (free) {
             this.pointers.push(stringPtr);
         }
@@ -330,11 +437,10 @@ export abstract class LVGLPageRuntime {
         return ptr;
     }
 
-    freePointers() {
-        for (const ptr of this.pointers) {
+    freePointers(pointers: number[]) {
+        for (const ptr of pointers) {
             this.wasm._free(ptr);
         }
-        this.pointers = [];
     }
 
     static detachRuntimeFromPage(page: Page) {
@@ -550,7 +656,7 @@ export abstract class LVGLPageRuntime {
     stringLiteral(str: string) {
         let strPtr = this.stringLiterals.get(str);
         if (!strPtr) {
-            strPtr = this.wasm.allocateUTF8(str);
+            strPtr = this.wasm.stringToNewUTF8(str);
             this.stringLiterals.set(str, strPtr);
         }
         return strPtr;
@@ -565,6 +671,30 @@ export abstract class LVGLPageRuntime {
     ) {}
 
     lvglOnEventHandler(obj: number, eventCode: number, event: number) {}
+
+    addButtonMatrixBuffers(mapBuffer: number, mapArray: Uint32Array, ctrlMapBuffer: number) {
+        this.buttonMatrixBuffers.push({
+            mapBuffer,
+            mapArray,
+            ctrlMapBuffer
+        });
+    }
+
+    freeAllButtonMatrixBuffers() {
+        for (const buffers of this.buttonMatrixBuffers) {
+            buffers.mapArray
+                    .slice(0, -1)
+                    .forEach(value => this.wasm._free(value));
+
+            this.wasm._free(buffers.mapBuffer);
+
+            if (buffers.ctrlMapBuffer) {
+                this.wasm._free(buffers.ctrlMapBuffer);
+            }
+        }
+
+        this.buttonMatrixBuffers = [];
+    }
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -574,6 +704,7 @@ export class LVGLPageEditorRuntime extends LVGLPageRuntime {
     dispose2: IReactionDisposer | undefined;
     requestAnimationFrameId: number | undefined;
     wasError: boolean = false;
+    ctxPage: Page | undefined;
 
     constructor(
         page: Page,
@@ -673,7 +804,10 @@ export class LVGLPageEditorRuntime extends LVGLPageRuntime {
 
                         this.wasm._lvglClearTimeline();
 
-                        this.freePointers();
+                        const pointers = this.pointers.slice();
+                        this.pointers = [];
+
+                        this.freeAllButtonMatrixBuffers();
 
                         this.createStyles();
 
@@ -709,6 +843,8 @@ export class LVGLPageEditorRuntime extends LVGLPageRuntime {
                             this.page._lvglObj = pageObj;
                         });
 
+                        this.freePointers(pointers);
+
                         this.deleteStyles();
 
                         this.dispose2 = autorun(() => {
@@ -734,6 +870,11 @@ export class LVGLPageEditorRuntime extends LVGLPageRuntime {
                                 }
                             }
                         });
+
+                        if (this.ctxPage != undefined && this.ctxPage != this.page) {
+                            this.ctx.fillStyle = "#FFFFFF";
+                            this.ctx.fillRect(0, 0, this.displayWidth, this.displayHeight);
+                        }
                     } catch (e) {
                         console.error(e);
                         this.wasError = true;
@@ -773,6 +914,7 @@ export class LVGLPageEditorRuntime extends LVGLPageRuntime {
                 this.displayWidth,
                 this.displayHeight
             );
+            this.ctxPage = this.page;
         } else {
             if (this.wasError) {
                 this.ctx.clearRect(0, 0, this.displayWidth, this.displayHeight);
@@ -802,9 +944,9 @@ export class LVGLPageEditorRuntime extends LVGLPageRuntime {
             this.dispose2 = undefined;
         }
 
-        LVGLPageRuntime.detachRuntimeFromPage(this.page);
+        super.reset();
 
-        this.isMounted = false;
+        LVGLPageRuntime.detachRuntimeFromPage(this.page);
     }
 }
 
@@ -1038,6 +1180,38 @@ export class LVGLPageViewerRuntime extends LVGLPageRuntime {
 
     async mount() {
         this.lvglGroupObjects = [];
+
+        // init themes
+        {
+            let themeNamesPtr = this.wasm._malloc(this.project.themes.length * 4);
+
+            let themeColorsPtr = this.wasm._malloc(
+                this.project.colors.length * this.project.themes.length * 4
+            );
+
+            for (let i = 0; i < this.project.themes.length; i++) {
+                const theme = this.project.themes[i];
+
+                const themeNamePtr = this.wasm.stringToNewUTF8(theme.name);
+                this.wasm.HEAP32[themeNamesPtr / 4 + i] = themeNamePtr;
+
+                for (let j = 0; j < this.project.colors.length; j++) {
+                    const colorValue = theme.colors[j];
+                    const rgb = tinycolor(colorValue).toRgb();
+
+                    // result is in BGR format
+                    let colorNum =
+                        (rgb.b << 0) | (rgb.g << 8) | (rgb.r << 16) | (255 << 24);
+
+                    // signed to unsigned
+                    colorNum = colorNum >>> 0;
+
+                    this.wasm.HEAP32[themeColorsPtr / 4 + i * this.project.colors.length + j] = colorNum;
+                }
+            }
+
+            this.wasm._eez_flow_init_themes(themeNamesPtr, this.project.themes.length, 0, themeColorsPtr, this.project.colors.length);
+        }
 
         // create groups
         for (const group of this.project.lvglGroups.groups) {
@@ -1355,8 +1529,20 @@ export class LVGLPageViewerRuntime extends LVGLPageRuntime {
                     : "?"
             )
             .join(USER_WIDGET_IDENTIFIER_SEPARATOR);
-
+        
         return this.runtime.assetsMap.lvglWidgetIndexes[identifier];
+    }
+
+    getLvglObjectNameFromIndex(index: number) {
+        for (const [name, idx] of Object.entries(
+            this.runtime.assetsMap.lvglWidgetIndexes
+        )) {
+            if (idx == index) {
+                return this.stringLiteral(name);
+            }
+        }
+
+        return 0;
     }
 
     override addTickCallback(callback: (flowState: number) => void) {
@@ -1382,14 +1568,16 @@ export class LVGLPageViewerRuntime extends LVGLPageRuntime {
     ) {
         const eventCode = getLvglEvents(this.project)[eventName].code;
 
+        if (!this.eventHandlers.find(eventHandler => eventHandler.obj == obj)) {
+            this.wasm._lvglAddEventHandler(obj);
+        }
+
         this.eventHandlers.push({
             page: this.page,
             obj,
             eventCode,
             callback
         });
-
-        this.wasm._lvglAddEventHandler(obj, eventCode);
     }
 
     override lvglOnEventHandler(obj: number, eventCode: number, event: number) {
@@ -1557,6 +1745,8 @@ export class LVGLStylesEditorRuntime extends LVGLPageRuntime {
                             widget => (widget._lvglObj = undefined)
                         );
                     });
+
+                    this.freeAllButtonMatrixBuffers();
 
                     this.selectedStyle;
                     this.project._store.uiStateStore.lvglState;
@@ -1726,185 +1916,4 @@ function setObjects(
             widget => (widget._lvglObj = objects[index++])
         );
     });
-}
-
-////////////////////////////////////////////////////////////////////////////////
-
-export class LVGLReflectEditorRuntime extends LVGLPageRuntime {
-    static PREVIEW_WIDTH = 400;
-    static PREVIEW_HEIGHT = 400;
-
-    foundDifferences = false;
-
-    constructor(project: Project) {
-        const widgets = getClassesDerivedFrom(
-            project._store,
-            ProjectEditor.LVGLWidgetClass
-        ).filter(componentClass =>
-            componentClass.objectClass.classInfo.enabledInComponentPalette
-                ? componentClass.objectClass.classInfo.enabledInComponentPalette(
-                      ProjectType.LVGL,
-                      project._store
-                  )
-                : true
-        );
-
-        const page = createObject<Page>(
-            project._store,
-            {
-                components: widgets.map(componentClass =>
-                    Object.assign(
-                        {},
-                        getDefaultValue(
-                            project._store,
-                            componentClass.objectClass.classInfo
-                        ),
-                        {
-                            type: componentClass.name,
-                            left: 0,
-                            leftUnit: "px",
-                            top: 0,
-                            topUnit: "px",
-                            width: LVGLStylesEditorRuntime.PREVIEW_WIDTH,
-                            widthUnit: "px",
-                            height: LVGLStylesEditorRuntime.PREVIEW_HEIGHT,
-                            heightUnit: "px",
-                            localStyles: {}
-                        }
-                    )
-                )
-            },
-            ProjectEditor.PageClass,
-            undefined,
-            true
-        );
-
-        setParent(page, project);
-
-        super(page);
-
-        this.mount();
-    }
-
-    get isEditor() {
-        return true;
-    }
-
-    get displayWidth() {
-        return LVGLStylesEditorRuntime.PREVIEW_WIDTH;
-    }
-
-    get displayHeight() {
-        return LVGLStylesEditorRuntime.PREVIEW_HEIGHT;
-    }
-
-    mount() {
-        this.wasm = getLvglWasmFlowRuntimeConstructor(this.lvglVersion)(
-            async () => {
-                runInAction(() => {
-                    this.page._lvglRuntime = this;
-                    this.page._lvglObj = undefined;
-                });
-
-                this.wasm._init(
-                    0,
-                    0,
-                    0,
-                    0,
-                    this.displayWidth,
-                    this.displayHeight,
-                    this.project.settings.general.darkTheme,
-                    -(new Date().getTimezoneOffset() / 60) * 100,
-                    false
-                );
-
-                const pageObj = this.page.lvglCreate(this, 0);
-                if (!pageObj) {
-                    console.error("pageObj is undefined");
-                    return;
-                }
-
-                const flags = getLvglFlagCodes(this.page) as {
-                    [key: string]: number;
-                };
-
-                const children = this.page.lvglScreenWidget!.children;
-                for (let i = 0; i < children.length; i++) {
-                    const obj = children[i]._lvglObj!;
-
-                    let reflectFlagsArr: string[] = [];
-                    for (const key of Object.keys(flags)) {
-                        if (this.wasm._lvglObjHasFlag(obj, flags[key])) {
-                            reflectFlagsArr.push(key);
-                        }
-                    }
-                    const reflectFlags = reflectFlagsArr.sort().join("|");
-
-                    const classInfo = getClassInfo(children[i]);
-                    const defaultValue = getDefaultValue(
-                        this.project._store,
-                        classInfo
-                    );
-                    let objInitFlags = defaultValue.widgetFlags;
-                    if (defaultValue.hiddenFlag) {
-                        objInitFlags = "HIDDEN|" + objInitFlags;
-                    }
-                    if (defaultValue.clickableFlag) {
-                        objInitFlags = "CLICKABLE|" + objInitFlags;
-                    }
-                    let objDefaultFlags;
-                    if (typeof classInfo.lvgl == "function") {
-                        objDefaultFlags = classInfo.lvgl(
-                            children[i],
-                            this.project
-                        ).defaultFlags;
-                    } else {
-                        objDefaultFlags = classInfo.lvgl!.defaultFlags;
-                    }
-
-                    objInitFlags = objInitFlags.split("|").sort().join("|");
-                    objDefaultFlags = objDefaultFlags
-                        .split("|")
-                        .sort()
-                        .join("|");
-
-                    if (
-                        objInitFlags != objDefaultFlags ||
-                        objDefaultFlags != reflectFlags
-                    ) {
-                        if (!this.foundDifferences) {
-                            this.foundDifferences = true;
-                            console.log("<LVGLReflectEditorRuntime>");
-                            console.log("\tLVGL version:", this.lvglVersion);
-                        }
-
-                        console.log("\t" + children[i].type);
-                        console.log("\t\tInitFlags   : " + objInitFlags);
-                        console.log("\t\tDefaultFlags: " + objDefaultFlags);
-                        console.log("\t\tReflect     : " + reflectFlags);
-                    }
-                }
-
-                if (this.foundDifferences) {
-                    console.log("/<LVGLReflectEditorRuntime>");
-                }
-            }
-        );
-    }
-
-    unmount() {
-        LVGLPageRuntime.detachRuntimeFromPage(this.page);
-    }
-}
-
-// let versionReflected = new Set<string>();
-
-export function reflectLvglVersion(project: Project) {
-    /*
-    if (versionReflected.has(project.settings.general.lvglVersion)) {
-        return;
-    }
-    versionReflected.add(project.settings.general.lvglVersion);
-    new LVGLReflectEditorRuntime(project);
-    */
 }

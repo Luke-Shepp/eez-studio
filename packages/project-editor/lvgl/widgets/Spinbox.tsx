@@ -135,7 +135,7 @@ export class LVGLSpinboxWidget extends LVGLWidget {
             return {
                 parts: ["MAIN", "SELECTED", "CURSOR"],
                 defaultFlags:
-                    project.settings.general.lvglVersion == "9.0"
+                    project.settings.general.lvglVersion.startsWith("9.")
                         ? "CLICKABLE|CLICK_FOCUSABLE|GESTURE_BUBBLE|PRESS_LOCK|SCROLLABLE|SCROLL_CHAIN_HOR|SCROLL_CHAIN_VER|SCROLL_ELASTIC|SCROLL_MOMENTUM|SCROLL_ON_FOCUS|SNAPPABLE"
                         : "CLICKABLE|CLICK_FOCUSABLE|GESTURE_BUBBLE|PRESS_LOCK|SCROLLABLE|SCROLL_CHAIN_HOR|SCROLL_CHAIN_VER|SCROLL_ELASTIC|SCROLL_MOMENTUM|SCROLL_ON_FOCUS|SCROLL_WITH_ARROW|SNAPPABLE",
                 states: ["CHECKED", "DISABLED", "FOCUSED", "PRESSED"]
@@ -206,7 +206,7 @@ export class LVGLSpinboxWidget extends LVGLWidget {
                     "lv_spinbox_get_step"
                 );
 
-                code.ifIntegerNotEqual(new_val, cur_val, () => {
+                code.ifNotEqual(new_val, cur_val, () => {
                     code.tickChangeStart();
 
                     code.callObjectFunction("lv_spinbox_set_step", new_val);
@@ -221,11 +221,11 @@ export class LVGLSpinboxWidget extends LVGLWidget {
                     const ta = code.callFreeFunctionWithAssignment(
                         "lv_obj_t *",
                         "ta",
-                        "lv_event_get_target",
+                        code.lv_event_get_target,
                         event
                     );
 
-                    code.ifIntegerNotEqual(tick_value_change_obj, ta, () => {
+                    code.ifNotEqual(tick_value_change_obj, ta, () => {
                         const value = code.callFreeFunctionWithAssignment(
                             "int32_t",
                             "value",
@@ -262,7 +262,7 @@ export class LVGLSpinboxWidget extends LVGLWidget {
                     "lv_spinbox_get_value"
                 );
 
-                code.ifIntegerNotEqual(new_val, cur_val, () => {
+                code.ifNotEqual(new_val, cur_val, () => {
                     code.tickChangeStart();
 
                     code.callObjectFunction("lv_spinbox_set_value", new_val);
@@ -277,11 +277,11 @@ export class LVGLSpinboxWidget extends LVGLWidget {
                     const ta = code.callFreeFunctionWithAssignment(
                         "lv_obj_t *",
                         "ta",
-                        "lv_event_get_target",
+                        code.lv_event_get_target,
                         event
                     );
 
-                    code.ifIntegerNotEqual(tick_value_change_obj, ta, () => {
+                    code.ifNotEqual(tick_value_change_obj, ta, () => {
                         const value = code.callFreeFunctionWithAssignment(
                             "int32_t",
                             "value",

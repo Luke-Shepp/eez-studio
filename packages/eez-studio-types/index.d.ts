@@ -376,6 +376,14 @@ export interface WorkerToRenderMessage {
         name: string;
     };
 
+    getLvglFontByName?: {
+        name: string;
+    };
+
+    getLvglObjectNameFromIndex?: {
+        index: number;
+    };
+
     lvglObjAddStyle?: {
         targetObj: number;
         styleIndex: number;
@@ -539,7 +547,9 @@ export interface IWasmFlowRuntime {
     HEAPF32: Float32Array;
     HEAPF64: Float64Array;
 
-    allocateUTF8(str: string): number;
+    FS: any;
+
+    stringToNewUTF8(str: string): number;
     UTF8ToString(ptr: number): string;
     AsciiToString(ptr: number): string;
 
@@ -657,11 +667,7 @@ export interface IWasmFlowRuntime {
     _lvglDeleteObject(obj: number): void;
     _lvglDeleteObjectIndex(index: number): void;
     _lvglDeletePageFlowState(index: number): void;
-    _lvglObjAddFlag(obj: number, f: number): void;
-    _lvglObjClearFlag(obj: number, f: number): void;
-    _lvglObjHasFlag(obj: number, f: number): boolean;
-    _lvglObjAddState(obj: number, s: number): void;
-    _lvglObjClearState(obj: number, s: number): void;
+
     _lvglObjGetStylePropColor(obj: number, part: number, state: number, prop: number): number;
     _lvglObjGetStylePropNum(obj: number, part: number, state: number, prop: number): number;
     _lvglObjSetLocalStylePropColor(obj: number, prop: number, color: number, selector: number): void;
@@ -670,6 +676,9 @@ export interface IWasmFlowRuntime {
     _lvglObjGetStylePropBuiltInFont(obj: number, part: number, state: number, prop: number): number;
     _lvglObjGetStylePropFontAddr(obj: number, part: number, state: number, prop: number): number;
     _lvglObjSetLocalStylePropBuiltInFont(obj: number, prop: number, font_index: number, selector: number): void;
+
+    _lvglSetObjStylePropBuiltInFont(obj: number, style: number, prop: number, font_index: number): void
+    _lvglSetObjStylePropPtr(obj: number, style: number, prop: number, ptr: number): void;
 
     _lvglStyleCreate(): number;
     _lvglStyleSetPropColor(obj: number, prop: number, color: number): void;
@@ -687,12 +696,7 @@ export interface IWasmFlowRuntime {
     _lvglGetObjHeight(obj: number): number;
     _lvglLoadFont(font_file_path: number, fallback_user_font: number, fallback_builtin_font: number): number;
     _lvglFreeFont(font_ptr: number): void;
-    _lvglAddObjectFlowCallback(obj: number, filter: number, flow_state: number, component_index: number, output_or_property_index: number, userDataValuePtr: number): void;
-    
-    _lvglUpdateCheckedState(obj: number, flow_state: number, component_index: number, property_index: number): void;
-    _lvglUpdateDisabledState(obj: number, flow_state: number, component_index: number, property_index: number): void;
-    _lvglUpdateHiddenFlag(obj: number, flow_state: number, component_index: number, property_index: number): void;
-    _lvglUpdateClickableFlag(obj: number, flow_state: number, component_index: number, property_index: number): void;
+
     _lvglAddTimelineKeyframe(
         obj: number,
         page_index: number,
@@ -711,11 +715,6 @@ export interface IWasmFlowRuntime {
     _lvglClearTimeline(): void;
     _lvglGetFlowState(flowState: number, userWidgetComponentIndexOrPageIndex: number): number;
 
-    _lvglSetScrollBarMode(obj: number, mode: number);
-    _lvglSetScrollDir(obj: number, dir: number);
-    _lvglSetScrollSnapX(obj: number, align: number);
-    _lvglSetScrollSnapY(obj: number, align: number);
-
     _lvglLineSetPoints(obj: number, point_values: number, point_num: number);
     _lvglScrollTo(obj: number, x: number, y: number, anim_en: boolean);
     _lvglGetScrollX(obj: number): number;
@@ -732,7 +731,15 @@ export interface IWasmFlowRuntime {
 
     _lvglDeleteScreenOnUnload(screenIndex: number);
 
-    _lvglAddEventHandler(obj: number, eventCode: number): void;
+    _lvglAddEventHandler(obj: number): void;
+
+    _lvglCreateFreeTypeFont(filePath: number, size: number, renderMode: number, style: number): number;
+
+    _lvglGetBuiltinFontPtr(fontName: number): number;
+
+    _lvglCreateAnim(setDelay: boolean, delay: number, setRepeatDelay: boolean, repeatDelay: number, setRepeatCount: boolean, repeatCount: number): number;
+
+    _eez_flow_init_themes(themeNames: number, numThemes: number, changeColorTheme: number, themeColors: number, numColorsPerTheme: number);
 }
 
 export interface IDashboardComponentContext {

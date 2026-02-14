@@ -7,8 +7,7 @@ import {
     autorun,
     runInAction,
     makeObservable,
-    IReactionDisposer,
-    computed
+    IReactionDisposer
 } from "mobx";
 import { observer } from "mobx-react";
 
@@ -27,7 +26,7 @@ import {
     PropertyInfo,
     PropertyProps
 } from "project-editor/core/object";
-import type { Project, ProjectType } from "project-editor/project/project";
+import type { LVGLVersion, Project, ProjectType } from "project-editor/project/project";
 import { ProjectContext } from "project-editor/project/context";
 import { getPropertyValue } from "project-editor/ui-components/PropertyGrid/utils";
 import type {
@@ -118,21 +117,20 @@ export const OBJECT_VARIABLE_STATUS_STRUCT_NAME = "$ObjectVariableStatus";
 class SystemStructure implements IStructure {
     name: string;
     fields: IStructureField[];
+    _fieldsMap: Map<string, IStructureField>;
 
     constructor(structure: Omit<IStructure, "fieldsMap">) {
         Object.assign(this, structure);
-
-        makeObservable(this, {
-            name: observable,
-            fields: observable,
-            fieldsMap: computed
-        });
     }
 
     get fieldsMap() {
-        return new Map<string, IStructureField>(
-            this.fields.map(field => [field.name, field])
-        );
+        if (!this._fieldsMap) {
+            this._fieldsMap =  new Map<string, IStructureField>(
+                this.fields.map(field => [field.name, field])
+            );
+        }
+
+        return this._fieldsMap;
     }
 }
 
@@ -304,8 +302,10 @@ export function registerSystemStructure(
 
 ////////////////////////////////////////////////////////////////////////////////
 
-class SystemEnum implements IEnum {
+export class SystemEnum implements IEnum {
     static SYSTEM_ENUMS: SystemEnum[] = [];
+
+    _membersMap: Map<string, IEnumMember> | undefined;
 
     static getSystemEnums(projectStore: ProjectStore) {
         return this.SYSTEM_ENUMS.filter(systemEnum => {
@@ -319,15 +319,13 @@ class SystemEnum implements IEnum {
                 ) != -1
             ) {
                 if (projectStore.projectTypeTraits.isLVGL) {
-                    if (systemEnum.lvglVersion == undefined) {
+                    if (systemEnum.lvglVersions == undefined) {
                         return true;
                     }
-
-                    if (
-                        systemEnum.lvglVersion ==
-                        projectStore.project.settings.general.lvglVersion
-                    ) {
-                        return true;
+                    for (let i = 0; i < systemEnum.lvglVersions.length; i++) {
+                        if (projectStore.project.settings.general.lvglVersion == systemEnum.lvglVersions[i]) {
+                            return true;
+                        }
                     }
                 }
             }
@@ -340,19 +338,64 @@ class SystemEnum implements IEnum {
         public name: string,
         public members: IEnumMember[],
         private projectTypes: ProjectType[] | undefined,
-        private lvglVersion?: "8.3" | "9.0"
+        private lvglVersions?: LVGLVersion[]
     ) {
-        makeObservable(this, {
-            membersMap: computed
-        });
     }
 
     get membersMap() {
-        const map = new Map<string, IEnumMember>();
-        for (const member of this.members) {
-            map.set(member.name, member);
+        if (!this._membersMap) {
+            this._membersMap = new Map<string, IEnumMember>();
+            for (const member of this.members) {
+                this._membersMap.set(member.name, member);
+            }
         }
-        return map;
+        return this._membersMap;
+    }
+
+    compareTo(
+        name: string,
+        projectTypes: ProjectType[] | undefined,
+        lvglVersions?: LVGLVersion[]
+    ) {
+        if (name != this.name) {
+            return false;
+        }
+
+        // Deep compare projectTypes
+        if (projectTypes === this.projectTypes) {
+            // Both are the same reference or both undefined
+        } else if (!projectTypes || !this.projectTypes) {
+            // One is undefined/null and the other isn't
+            return false;
+        } else if (projectTypes.length !== this.projectTypes.length) {
+            return false;
+        } else {
+            // Compare array contents
+            for (let i = 0; i < projectTypes.length; i++) {
+                if (projectTypes[i] !== this.projectTypes[i]) {
+                    return false;
+                }
+            }
+        }
+
+        if (lvglVersions === this.lvglVersions) {
+            // Both are the same reference or both undefined
+        } else if (!lvglVersions || !this.lvglVersions) {
+            // One is undefined/null and the other isn't
+            return false;
+        } else if (lvglVersions.length !== this.lvglVersions.length) {
+            // Different lengths
+            return false;
+        } else {
+            // Compare array contents
+            for (let i = 0; i < lvglVersions.length; i++) {
+                if (lvglVersions[i] !== this.lvglVersions[i]) {
+                    return false;
+                }
+            }
+        }
+
+        return true;
     }
 }
 
@@ -360,16 +403,25 @@ export function registerSystemEnum({
     name,
     members,
     projectTypes,
-    lvglVersion
+    lvglVersions
 }: {
     name: string;
     members: IEnumMember[];
     projectTypes: ProjectType[] | undefined;
-    lvglVersion?: "8.3" | "9.0";
+    lvglVersions?: LVGLVersion[];
 }) {
-    SystemEnum.SYSTEM_ENUMS.push(
-        new SystemEnum(name, members, projectTypes, lvglVersion)
+    const existingSystemEnum = SystemEnum.SYSTEM_ENUMS.find(
+        systemEnum => systemEnum.compareTo(name, projectTypes, lvglVersions)
     );
+    
+    if (existingSystemEnum) {
+        existingSystemEnum.members = members;
+        existingSystemEnum._membersMap = undefined;
+    } else {
+        SystemEnum.SYSTEM_ENUMS.push(
+            new SystemEnum(name, members, projectTypes, lvglVersions)
+        );
+    }
 }
 
 export function getSystemEnums(projectStore: ProjectStore) {

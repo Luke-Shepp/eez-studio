@@ -101,7 +101,6 @@ import {
 import { showGenericDialog } from "eez-studio-ui/generic-dialog";
 import { validators } from "eez-studio-shared/validation";
 import { isValidUrl } from "project-editor/core/util";
-import { reflectLvglVersion } from "project-editor/lvgl/page-runtime";
 import {
     canPasteWithDependencies,
     pasteWithDependencies
@@ -198,6 +197,10 @@ export class ProjectStore {
     extensionNames: string[];
     objectVariableTypes = new Map<string, IObjectVariableType>();
     importedActionComponentClasses = new Map<string, typeof ActionComponent>();
+
+    objectCollapsedStore = observable.box<
+        { object: IEezObject; collapsed: Set<IEezObject> }[]
+    >([]);
 
     get editorsStore() {
         return this.runtime
@@ -387,6 +390,22 @@ export class ProjectStore {
             }
             return true;
         });
+
+        // F7 - Full Simulator mode (for LVGL projects with Docker Desktop enabled)
+        Mousetrap.bind("f7", () => {
+            if (
+                this.projectTypeTraits.isLVGL &&
+                this.project.settings.build.useDockerDesktop
+            ) {
+                if (this.layoutModels.isDockerSimulatorMode) {
+                    this.onSetEditorMode();
+                } else {
+                    this.onSetFullSimulatorMode();
+                }
+                return false;
+            }
+            return true;
+        });
     }
 
     onDeactivate() {
@@ -430,6 +449,17 @@ export class ProjectStore {
 
         if (this.changingRuntimeMode) {
             clearTimeout(this.changingRuntimeMode);
+        }
+
+        // Stop Docker simulator and reset state when project is closed
+        if (this.projectTypeTraits.isLVGL) {
+            const projectPath = this.filePath;
+            import("project-editor/lvgl/docker-build/build-manager").then(
+                async ({ dockerBuildManager }) => {
+                    await dockerBuildManager.stopFullSimulator(projectPath);
+                    dockerBuildManager.resetSimulatorState(projectPath);
+                }
+            );
         }
     }
 
@@ -672,7 +702,8 @@ export class ProjectStore {
                             extensions: ["eez-project"]
                         },
                         { name: "All Files", extensions: ["*"] }
-                    ]
+                    ],
+                    defaultPath: this.filePath
                 });
                 let filePath = result.filePath;
                 if (filePath) {
@@ -735,10 +766,6 @@ export class ProjectStore {
         await this.setProject(project, filePath);
 
         this.openProjectsManager.mount();
-
-        if (this.projectTypeTraits.isLVGL) {
-            reflectLvglVersion(this.project);
-        }
     }
 
     async saveModified() {
@@ -793,11 +820,15 @@ export class ProjectStore {
                 this.layoutModels.root,
                 LayoutModels.OUTPUT_TAB_ID
             );
+            notification.error("Build failed. Check Output panel for errors.");
         } else {
             runInAction(() => {
                 this.lastSuccessfulBuildRevision = this.lastRevisionStable;
             });
-            notification.info("Build successful.", { autoClose: 1000 });
+            // Don't show "Build successful" if Docker build will follow (in Full Simulator mode)
+            if (!this.layoutModels?.isDockerSimulatorMode) {
+                notification.info("Build successful.", { autoClose: 1000 });
+            }
         }
         return result;
     }
@@ -1207,6 +1238,11 @@ export class ProjectStore {
         }
 
         this.editorsStore?.refresh(true);
+
+        // Also exit full simulator mode if active
+        if (this.layoutModels.isDockerSimulatorMode) {
+            this.onExitFullSimulatorMode();
+        }        
     }
 
     async setEditorMode(force: boolean = false) {
@@ -1236,11 +1272,22 @@ export class ProjectStore {
 
             this.editorsStore?.refresh(true);
         }
+
+        // Also exit full simulator mode if active
+        if (this.layoutModels.isDockerSimulatorMode) {
+            await this.onExitFullSimulatorMode();
+        }
     }
 
-    onSetEditorMode = () => {
+    onSetEditorMode = async () => {
         if (this.changingRuntimeMode) {
             this.changingRuntimeModeNewMode = "editor";
+            return;
+        }
+
+        // Exit full simulator mode if active
+        if (this.layoutModels.isDockerSimulatorMode) {
+            await this.onExitFullSimulatorMode();
             return;
         }
 
@@ -1289,6 +1336,42 @@ export class ProjectStore {
             this.layoutModels.root,
             LayoutModels.DEBUGGER_TAB_ID
         );
+    };
+
+    onSetFullSimulatorMode = async () => {
+        // Import and use the build manager
+        const { dockerBuildManager } = await import(
+            "project-editor/lvgl/docker-build/build-manager"
+        );
+
+        // Exit any existing runtime mode first
+        if (this.runtime) {
+            await this.setEditorMode(true);
+        }
+
+        // Toggle the mode
+        runInAction(() => {
+            this.layoutModels.isDockerSimulatorMode = true;
+        });
+
+        // Start the full simulator build and preview
+        // Note: Multiple projects can show preview simultaneously,
+        // but only one can build at a time (handled inside startFullSimulator)
+        await dockerBuildManager.startFullSimulator(this);
+    };
+
+    onExitFullSimulatorMode = async () => {
+        const { dockerBuildManager } = await import(
+            "project-editor/lvgl/docker-build/build-manager"
+        );
+
+        // Only change UI state - do not stop the build
+        // Build continues in the background and user can re-enter Full Sim mode
+        await dockerBuildManager.leaveFullSimulatorUI(this.filePath);
+
+        runInAction(() => {
+            this.layoutModels.isDockerSimulatorMode = false;
+        });
     };
 
     onRestart = () => {
@@ -1352,6 +1435,12 @@ export class ProjectStore {
                                         actionComponentDefinition,
                                         `${extension.name}/${actionComponentDefinition.name}`
                                     );
+
+                                if (!className || !actionComponentClass) {
+                                    throw new Error(
+                                        `Failed to create action component class for "${extension.name}/${actionComponentDefinition.name}"`
+                                    );
+                                }
 
                                 extensionContent.actionComponentClasses.push({
                                     className,

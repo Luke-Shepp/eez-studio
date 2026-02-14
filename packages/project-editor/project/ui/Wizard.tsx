@@ -34,6 +34,7 @@ import { SearchInput } from "eez-studio-ui/search-input";
 import { Icon } from "eez-studio-ui/icon";
 
 import { openProject } from "home/tabs-store";
+import { settingsController } from "home/settings";
 
 import {
     DASHBOARD_PROJECT_ICON,
@@ -50,6 +51,7 @@ import {
 } from "project-editor/store/examples-catalog";
 
 import {
+    LVGLVersion,
     PROJECT_TYPE_NAMES,
     ProjectType
 } from "project-editor/project/project";
@@ -118,11 +120,50 @@ interface IProjectType {
     resourceFiles?: string[];
     projectFileUrl?:
         | string
-        | { "8.3": string; "9.0": string }
+        | { "8.4.0": string; "9.2.2": string; "9.3.0": string; "9.4.0": string; }
         | { SCPI: string; PROPRIETARY: string };
 
     author?: string;
     authorLink?: string;
+}
+
+// Base URL for eez-project-templates on GitHub
+const EEZ_PROJECT_TEMPLATES_BASE_URL =
+    "https://raw.githubusercontent.com/eez-open/eez-project-templates/master/";
+
+// Helper function to convert GitHub URL to local path if local templates are enabled
+function getTemplatePathOrUrl(relativePath: string): string {
+    if (
+        settingsController.useLocalTemplates &&
+        settingsController.localTemplatesPath
+    ) {
+        // Convert to local path
+        return path.join(settingsController.localTemplatesPath, relativePath);
+    }
+    // Use GitHub URL
+    return EEZ_PROJECT_TEMPLATES_BASE_URL + relativePath;
+}
+
+// Helper function to load template file (either from local path or URL)
+async function loadTemplateFile(
+    pathOrUrl: string,
+    resultType: "json" | "buffer"
+): Promise<any> {
+    if (
+        settingsController.useLocalTemplates &&
+        settingsController.localTemplatesPath &&
+        !pathOrUrl.startsWith("http://") &&
+        !pathOrUrl.startsWith("https://")
+    ) {
+        // Load from local file system
+        if (resultType === "json") {
+            return readJsObjectFromFile(pathOrUrl);
+        } else {
+            return fs.promises.readFile(pathOrUrl);
+        }
+    }
+    // Load from URL
+    return fetchUrlOrReadFromCache(pathOrUrl, resultType);
 }
 
 const SAVED_OPTIONS_VERSION = 12;
@@ -132,7 +173,7 @@ enum SaveOptionsFlags {
     View
 }
 
-class WizardModel {
+export class WizardModel {
     section: "templates" | "examples" = "templates";
     folder: string | undefined = "_allTemplates";
     type: string | undefined = "dashboard";
@@ -221,7 +262,7 @@ class WizardModel {
         commandsProtocol: string;
     };
 
-    lvglVersion: "8.3" | "9.0" = "8.3";
+    lvglVersion: LVGLVersion = "8.4.0";
 
     commandsProtocol: CommandsProtocolType;
 
@@ -299,7 +340,7 @@ class WizardModel {
                     this.projectVersion = options.projectVersion;
                     this.gitClone = options.gitClone;
                     this.gitInit = options.gitInit;
-                    this.lvglVersion = options.lvglVersion ?? "8.3";
+                    this.lvglVersion = options.lvglVersion ?? "8.4.0";
                     this.commandsProtocol = options.commandsProtocol ?? "SCPI";
                 }
             } catch (err) {
@@ -708,8 +749,9 @@ class WizardModel {
                 projectName: "Dashboard",
                 description:
                     "Start your new Dashboard project development here.",
-                projectFileUrl:
-                    "https://raw.githubusercontent.com/eez-open/eez-project-templates/master/templates/dashboard.eez-project"
+                projectFileUrl: getTemplatePathOrUrl(
+                    "templates/dashboard.eez-project"
+                )
             },
             {
                 id: "firmware",
@@ -717,8 +759,9 @@ class WizardModel {
                 image: EEZ_GUI_PROJECT_ICON(128),
                 projectName: "EEZ-GUI",
                 description: "Start your new EEZ-GUI project development here.",
-                projectFileUrl:
-                    "https://raw.githubusercontent.com/eez-open/eez-project-templates/master/templates/firmware.eez-project"
+                projectFileUrl: getTemplatePathOrUrl(
+                    "templates/firmware.eez-project"
+                )
             },
             {
                 id: "LVGL",
@@ -727,8 +770,18 @@ class WizardModel {
                 projectName: "LVGL",
                 description: "Start your new LVGL project development here.",
                 projectFileUrl: {
-                    "8.3": "https://raw.githubusercontent.com/eez-open/eez-project-templates/master/templates/v0.23.0/LVGL-8.3.eez-project",
-                    "9.0": "https://raw.githubusercontent.com/eez-open/eez-project-templates/master/templates/v0.23.0/LVGL-9.0.eez-project"
+                    "8.4.0": getTemplatePathOrUrl(
+                        "templates/v0.23.0/LVGL-8.3.eez-project"
+                    ),
+                    "9.2.2": getTemplatePathOrUrl(
+                        "templates/v0.23.0/LVGL-9.0.eez-project"
+                    ),
+                    "9.3.0": getTemplatePathOrUrl(
+                        "templates/v0.23.0/LVGL-9.0.eez-project"
+                    ),
+                    "9.4.0": getTemplatePathOrUrl(
+                        "templates/v0.23.0/LVGL-9.0.eez-project"
+                    )
                 }
             },
             {
@@ -739,8 +792,18 @@ class WizardModel {
                 description:
                     "Start your new LVGL with EEZ Flow project development here.",
                 projectFileUrl: {
-                    "8.3": "https://raw.githubusercontent.com/eez-open/eez-project-templates/master/templates/v0.23.0/LVGL%20with%20EEZ%20Flow-8.3.eez-project",
-                    "9.0": "https://raw.githubusercontent.com/eez-open/eez-project-templates/master/templates/v0.23.0/LVGL%20with%20EEZ%20Flow-9.0.eez-project"
+                    "8.4.0": getTemplatePathOrUrl(
+                        "templates/v0.23.0/LVGL with EEZ Flow-8.3.eez-project"
+                    ),
+                    "9.2.2": getTemplatePathOrUrl(
+                        "templates/v0.23.0/LVGL with EEZ Flow-9.0.eez-project"
+                    ),
+                    "9.3.0": getTemplatePathOrUrl(
+                        "templates/v0.23.0/LVGL with EEZ Flow-9.0.eez-project"
+                    ),
+                    "9.4.0": getTemplatePathOrUrl(
+                        "templates/v0.23.0/LVGL with EEZ Flow-9.0.eez-project"
+                    )
                 }
             },
             {
@@ -750,9 +813,10 @@ class WizardModel {
                 projectName: "IEXT",
                 description: "Start your new IEXT project development here.",
                 projectFileUrl: {
-                    SCPI: "https://raw.githubusercontent.com/eez-open/eez-project-templates/master/templates/IEXT.eez-project",
-                    PROPRIETARY:
-                        "https://raw.githubusercontent.com/eez-open/eez-project-templates/master/templates/IEXT - PROPRIETARY.eez-project"
+                    SCPI: getTemplatePathOrUrl("templates/IEXT.eez-project"),
+                    PROPRIETARY: getTemplatePathOrUrl(
+                        "templates/IEXT - PROPRIETARY.eez-project"
+                    )
                 }
             }
         ].filter(projectType => this.searchFilter(projectType));
@@ -767,8 +831,9 @@ class WizardModel {
                 projectName: "BB3 Applet",
                 description:
                     "Start your new BB3 Applet project development here.",
-                projectFileUrl:
-                    "https://raw.githubusercontent.com/eez-open/eez-project-templates/master/templates/applet.eez-project"
+                projectFileUrl: getTemplatePathOrUrl(
+                    "templates/applet.eez-project"
+                )
             },
             {
                 id: "resource",
@@ -777,8 +842,9 @@ class WizardModel {
                 projectName: "BB3 MicroPython Script",
                 description:
                     "Start your new BB3 MicroPython project development here.",
-                projectFileUrl:
-                    "https://raw.githubusercontent.com/eez-open/eez-project-templates/master/templates/resource.eez-project"
+                projectFileUrl: getTemplatePathOrUrl(
+                    "templates/resource.eez-project"
+                )
             }
         ].filter(projectType => this.searchFilter(projectType));
     }
@@ -1000,7 +1066,7 @@ class WizardModel {
     }
 
     async loadEezProject() {
-        let projectFileUrl;
+        let projectFilePath;
 
         if (this.section == "templates") {
             const urlDef = this.selectedProjectType?.projectFileUrl;
@@ -1009,19 +1075,19 @@ class WizardModel {
             }
 
             if (typeof urlDef == "string") {
-                projectFileUrl = urlDef;
+                projectFilePath = urlDef;
             } else {
                 if ("SCPI" in urlDef) {
-                    projectFileUrl = urlDef[this.commandsProtocol];
+                    projectFilePath = urlDef[this.commandsProtocol];
                 } else {
-                    projectFileUrl = urlDef[this.lvglVersion];
+                    projectFilePath = urlDef[this.lvglVersion];
                 }
             }
         } else {
-            projectFileUrl = this.type!;
+            projectFilePath = this.type!;
         }
 
-        return await fetchUrlOrReadFromCache(projectFileUrl, "json");
+        return await loadTemplateFile(projectFilePath, "json");
     }
 
     async loadResourceFile(resourceFileRelativePath: string) {
@@ -1192,7 +1258,8 @@ class WizardModel {
 
     createProject = async (
         modalDialog: IObservableValue<any>,
-        runMode: boolean
+        runMode: boolean,
+        openProjectWhenDone: boolean = true
     ) => {
         if (this.createProjectInProgress) {
             return false;
@@ -1622,11 +1689,12 @@ class WizardModel {
                         const fontFileName = "Oswald-Medium.ttf";
                         const fontFileDestPath = `${this.projectFolderPath}/${fontFileName}`;
 
-                        const fontFileUrl =
-                            "https://github.com/eez-open/eez-project-templates/raw/master/templates/Oswald-Medium.ttf";
+                        const fontFilePath = getTemplatePathOrUrl(
+                            "templates/Oswald-Medium.ttf"
+                        );
 
-                        const buffer = await fetchUrlOrReadFromCache(
-                            fontFileUrl,
+                        const buffer = await loadTemplateFile(
+                            fontFilePath,
                             "buffer"
                         );
 
@@ -1695,7 +1763,9 @@ class WizardModel {
 
                 this.saveOptions(SaveOptionsFlags.All);
 
-                openProject(projectFilePath, runMode);
+                if (openProjectWhenDone) {
+                    openProject(projectFilePath, runMode);
+                }
 
                 runInAction(() => {
                     this.name = undefined;
@@ -2065,7 +2135,7 @@ const ProjectTypeComponent = observer(
                                               projectType.id ==
                                                   "LVGL with EEZ Flow")
                                             ? "8.x | 9.x"
-                                            : "8.x"
+                                            : undefined
                                         : undefined
                             }}
                         />
@@ -2197,15 +2267,18 @@ const ProjectProperties = observer(
                                             onChange={action(
                                                 event =>
                                                     (wizardModel.lvglVersion =
-                                                        event.target.value ==
-                                                        "9.0"
-                                                            ? "9.0"
-                                                            : "8.3")
+                                                        event.target.value == "9.2.2" ||
+                                                        event.target.value == "9.3.0" || 
+                                                        event.target.value == "9.4.0"
+                                                            ? event.target.value
+                                                            : "8.4.0")
                                             )}
                                             value={wizardModel.lvglVersion}
                                         >
-                                            <option value="8.3">8.x</option>
-                                            <option value="9.0">9.x</option>
+                                            <option value="8.4.0">8.4.0</option>
+                                            <option value="9.2.2">9.2.2</option>
+                                            <option value="9.3.0">9.3.0</option>
+                                            <option value="9.4.0">9.4.0</option>
                                         </select>
                                     </div>
                                 )}

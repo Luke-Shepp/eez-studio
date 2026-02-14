@@ -160,31 +160,13 @@ export function getFlowStateAddressIndex(runtime: LVGLPageRuntime) {
     return runtime.lvglCreateContext.flowState;
 }
 
-export function lvglAddObjectFlowCallback(
-    runtime: LVGLPageRuntime,
-    obj: number,
-    filter: number,
-    component_index: number,
-    output_or_property_index: number,
-    userDataValuePtr: number
-) {
-    runtime.wasm._lvglAddObjectFlowCallback(
-        obj,
-        filter,
-        getFlowStateAddressIndex(runtime),
-        component_index,
-        output_or_property_index,
-        userDataValuePtr
-    );
-}
-
 export function checkWidgetTypeLvglVersion(
     widget: IEezObject,
     messages: IMessage[],
     lvglVersion: string
 ) {
     const projectStore = getProjectStore(widget);
-    if (projectStore.project.settings.general.lvglVersion != lvglVersion) {
+    if (!projectStore.project.settings.general.lvglVersion.startsWith(lvglVersion)) {
         messages.push(
             new Message(
                 MessageType.ERROR,

@@ -3,6 +3,7 @@ import { IActionPropertyDefinition, registerAction } from "./actions";
 import {
     LV_BUTTONMATRIX_CTRL_ENUM_NAME,
     LV_OBJ_FLAG_ENUM_NAME,
+    LV_PART_ENUM_NAME,
     LV_SCR_LOAD_ANIM_ENUM_NAME,
     LV_STATE_ENUM_NAME
 } from "./lvgl-constants";
@@ -299,6 +300,66 @@ registerAction({
 ////////////////////////////////////////////////////////////////////////////////
 
 registerAction({
+    id: 63,
+    name: "objGetDisplayX",
+    group: "Widget - Position and Size",
+    properties: [
+        {
+            name: "object",
+            type: "widget",
+            helpText: "The object to get the x coordinate"
+        },
+        {
+            name: "result",
+            type: "integer",
+            isAssignable: true,
+            helpText: "The variable to store the x coordinate"
+        }
+    ],
+    defaults: {},
+    label: ([object, width]) => (
+        <>
+            {object}
+            <RightArrow />
+            {width}
+        </>
+    ),
+    helpText: "Get the x coordinate of the object, relative to the display origin"
+});
+
+////////////////////////////////////////////////////////////////////////////////
+
+registerAction({
+    id: 64,
+    name: "objGetDisplayY",
+    group: "Widget - Position and Size",
+    properties: [
+        {
+            name: "object",
+            type: "widget",
+            helpText: "The object to get the y coordinate"
+        },
+        {
+            name: "result",
+            type: "integer",
+            isAssignable: true,
+            helpText: "The variable to store the y coordinate"
+        }
+    ],
+    defaults: {},
+    label: ([object, width]) => (
+        <>
+            {object}
+            <RightArrow />
+            {width}
+        </>
+    ),
+    helpText: "Get the y coordinate of the object, relative to the display origin"
+});
+
+////////////////////////////////////////////////////////////////////////////////
+
+registerAction({
     id: 6,
     name: "objSetWidth",
     group: "Widget - Position and Size",
@@ -408,6 +469,52 @@ registerAction({
         </>
     ),
     helpText: "Get the height of the object"
+});
+
+////////////////////////////////////////////////////////////////////////////////
+
+registerAction({
+    id: 59,
+    name: "objStyleSetProperty",
+    displayName: "Set Obj Style Prop",
+    group: "Widget - Styles",
+    properties: [
+        {
+            name: "object",
+            type: "widget",
+            helpText: "Widget"
+        },
+        {
+            name: "property",
+            type: "style-property",
+            helpText: "The style property to set"
+        },
+        {
+            name: "value",
+            type: "style-value",
+            helpText: "The value to set for the property"
+        },
+        {
+            name: "part",
+            type: `enum:${LV_PART_ENUM_NAME}`,
+            helpText: "The part of the object to set the property"
+        },
+        {
+            name: "state",
+            type: `enum:${LV_STATE_ENUM_NAME}`,
+            helpText: "The state of the object to set the property"
+        }
+    ],
+    defaults: {
+        part: "MAIN",
+        state: "DEFAULT"
+    },
+    label: ([object, property, value, part, state]) => (
+        <>
+            {object} "{property}" {value ?? "?"}{part != "MAIN" ? ` ${part}` : ""}{state != "DEFAULT" ? ` ${state}` : ""}
+        </>
+    ),
+    helpText: "Set the value of property in a style."
 });
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -828,6 +935,38 @@ registerAction({
 ////////////////////////////////////////////////////////////////////////////////
 
 registerAction({
+    id: 62,
+    name: "arcRotateObjToAngle",
+    group: "Arc",
+    properties: [
+        {
+            name: "object",
+            type: "widget:Arc",
+            helpText: "The arc object"
+        },
+        {
+            name: "objToRotate",
+            type: "widget",
+            helpText: "The object to rotate"
+        },
+        {
+            name: "offset",
+            type: "integer",
+            helpText: "Consider the radius larger with this value (< 0: for smaller radius)"
+        }
+    ],
+    defaults: {},
+    label: ([object, objToRotate, offset]) => (
+        <>
+            {object} {objToRotate} {offset}
+        </>
+    ),
+    helpText: "Rotate an object to the current position of the arc (knob)"
+});
+
+////////////////////////////////////////////////////////////////////////////////
+
+registerAction({
     id: 24,
     name: "barSetValue",
     group: "Bar",
@@ -1184,6 +1323,33 @@ registerAction({
 ////////////////////////////////////////////////////////////////////////////////
 
 registerAction({
+    id: 32,
+    name: "keyboardSetTextarea",
+    group: "Keyboard",
+    properties: [
+        {
+            name: "object",
+            type: "widget:Keyboard",
+            helpText: "The keyboard to set the textarea"
+        },
+        {
+            name: "textarea",
+            type: "widget:Textarea",
+            helpText: "The textarea to set"
+        }
+    ],
+    defaults: {},
+    label: ([object, textarea]) => (
+        <>
+            {object} {textarea}
+        </>
+    ),
+    helpText: "Set the textarea for the keyboard"
+});
+
+////////////////////////////////////////////////////////////////////////////////
+
+registerAction({
     id: 29,
     name: "labelSetText",
     group: "Label",
@@ -1369,28 +1535,65 @@ registerAction({
 ////////////////////////////////////////////////////////////////////////////////
 
 registerAction({
-    id: 32,
-    name: "keyboardSetTextarea",
-    group: "Keyboard",
+    id: 60,
+    name: "tabviewSetActiveTab",
+    group: "Tabview",
     properties: [
         {
             name: "object",
-            type: "widget:Keyboard",
-            helpText: "The keyboard to set the textarea"
+            type: "widget:Tabview",
+            helpText: "The tabview to set the active tab"
         },
         {
-            name: "textarea",
-            type: "widget:Textarea",
-            helpText: "The textarea to set"
+            name: "tab",
+            type: "integer",
+            helpText: "The index of the tab to activate (0-based)"
+        },
+        {
+            name: "animated",
+            type: "boolean",
+            helpText: "Use animation when switching tabs"
+        }
+    ],
+    defaults: {
+        animated: true
+    },
+    label: ([object, tab, animated], [_1, _2, animatedLabel]) => (
+        <>
+            {object} {tab} <i>{animatedLabel}</i>={animated}
+        </>
+    ),
+    helpText: "Set the active tab of the tabview"
+});
+
+////////////////////////////////////////////////////////////////////////////////
+
+registerAction({
+    id: 61,
+    name: "tabviewGetActiveTab",
+    group: "Tabview",
+    properties: [
+        {
+            name: "object",
+            type: "widget:Tabview",
+            helpText: "The tabview to get the active tab"
+        },
+        {
+            name: "result",
+            type: "integer",
+            isAssignable: true,
+            helpText: "The variable to store the active tab index"
         }
     ],
     defaults: {},
-    label: ([object, textarea]) => (
+    label: ([object, result]) => (
         <>
-            {object} {textarea}
+            {object}
+            <RightArrow />
+            {result}
         </>
     ),
-    helpText: "Set the textarea for the keyboard"
+    helpText: "Get the active tab index of the tabview"
 });
 
 ////////////////////////////////////////////////////////////////////////////////

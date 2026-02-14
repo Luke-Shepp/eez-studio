@@ -38,6 +38,9 @@ export class UIStateStore {
 
     objectUIStates = new Map<string, any>();
 
+    // Properties panel scroll positions - stores last 10 scroll positions keyed by objID
+    propertiesPanelScrollPositions = new Map<string, number>();
+
     logsPanelFilter: LogPanelFilter = "all";
 
     wasEmpty: boolean;
@@ -50,6 +53,8 @@ export class UIStateStore {
     flowZoom: number = 1;
 
     implementationLanguage = "C";
+
+    openDialogDefaultPath: string | undefined;
 
     get pageEditorFrontFace() {
         return this._pageEditorFrontFace;
@@ -249,6 +254,10 @@ export class UIStateStore {
             if (uiState.implementationLanguage != undefined) {
                 this.implementationLanguage = uiState.implementationLanguage;
             }
+
+            if (uiState.openDialogDefaultPath != undefined) {
+                this.openDialogDefaultPath = uiState.openDialogDefaultPath;
+            }
         });
     }
 
@@ -313,7 +322,8 @@ export class UIStateStore {
             showInactiveFlowsInDebugger: this.showFinishedFlowsInDebugger,
             globalFlowZoom: this.globalFlowZoom,
             flowZoom: this.flowZoom,
-            implementationLanguage: this.implementationLanguage
+            implementationLanguage: this.implementationLanguage,
+            openDialogDefaultPath: this.openDialogDefaultPath
         };
 
         return state;
@@ -374,6 +384,37 @@ export class UIStateStore {
             Object.assign(objectUIState, changes);
         } else {
             this.objectUIStates.set(key, changes);
+        }
+    }
+
+    ////////////////////////////////////////
+    // PROPERTIES PANEL SCROLL POSITIONS
+
+    static readonly MAX_SCROLL_POSITIONS = 10;
+
+    getPropertiesPanelScrollPosition(objID: string): number | undefined {
+        return this.propertiesPanelScrollPositions.get(objID);
+    }
+
+    setPropertiesPanelScrollPosition(objID: string, scrollTop: number) {
+        // If already exists, delete it first so it moves to the end (most recent)
+        if (this.propertiesPanelScrollPositions.has(objID)) {
+            this.propertiesPanelScrollPositions.delete(objID);
+        }
+
+        // Add new entry
+        this.propertiesPanelScrollPositions.set(objID, scrollTop);
+
+        // Remove oldest entries if exceeding limit
+        while (
+            this.propertiesPanelScrollPositions.size >
+            UIStateStore.MAX_SCROLL_POSITIONS
+        ) {
+            const firstKey = this.propertiesPanelScrollPositions.keys().next()
+                .value;
+            if (firstKey !== undefined) {
+                this.propertiesPanelScrollPositions.delete(firstKey);
+            }
         }
     }
 

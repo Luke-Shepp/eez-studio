@@ -105,7 +105,7 @@ export class LVGLTextareaWidget extends LVGLWidget {
                     "TEXTAREA_PLACEHOLDER"
                 ],
                 defaultFlags:
-                    project.settings.general.lvglVersion == "9.0"
+                    project.settings.general.lvglVersion.startsWith("9.")
                         ? "CLICKABLE|CLICK_FOCUSABLE|GESTURE_BUBBLE|PRESS_LOCK|SCROLLABLE|SCROLL_CHAIN_HOR|SCROLL_CHAIN_VER|SCROLL_ELASTIC|SCROLL_MOMENTUM|SCROLL_ON_FOCUS|SNAPPABLE"
                         : "CLICKABLE|CLICK_FOCUSABLE|GESTURE_BUBBLE|PRESS_LOCK|SCROLLABLE|SCROLL_CHAIN_HOR|SCROLL_CHAIN_VER|SCROLL_ELASTIC|SCROLL_MOMENTUM|SCROLL_ON_FOCUS|SCROLL_WITH_ARROW|SNAPPABLE",
                 states: ["CHECKED", "DISABLED", "FOCUSED", "PRESSED"],
@@ -139,7 +139,7 @@ export class LVGLTextareaWidget extends LVGLWidget {
         if (this.acceptedCharacters) {
             code.callObjectFunction(
                 "lv_textarea_set_accepted_chars",
-                code.stringProperty("literal", this.acceptedCharacters)
+                code.stringLiteral(this.acceptedCharacters)
             );
         }
 
@@ -196,11 +196,11 @@ export class LVGLTextareaWidget extends LVGLWidget {
                         const ta = code.callFreeFunctionWithAssignment(
                             "lv_obj_t *",
                             "ta",
-                            "lv_event_get_target",
+                            code.lv_event_get_target,
                             event
                         );
 
-                        code.ifIntegerNotEqual(
+                        code.ifNotEqual(
                             tick_value_change_obj,
                             ta,
                             () => {
@@ -229,7 +229,7 @@ export class LVGLTextareaWidget extends LVGLWidget {
         if (this.placeholder) {
             code.callObjectFunction(
                 "lv_textarea_set_placeholder_text",
-                code.stringProperty("literal", this.placeholder)
+                code.stringLiteral(this.placeholder)
             );
         }
 

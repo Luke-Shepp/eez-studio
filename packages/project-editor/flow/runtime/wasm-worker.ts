@@ -24,8 +24,9 @@ import { isArray } from "eez-studio-shared/util";
 import { getLvglWasmFlowRuntimeConstructor } from "project-editor/lvgl/lvgl-versions";
 import { runInAction } from "mobx";
 import deepEqual from "fast-deep-equal";
+import { LVGLVersion } from "project-editor/project/project";
 
-const eez_flow_runtime_constructor = require("project-editor/flow/runtime/eez_runtime.js");
+const eez_flow_runtime_constructor = require("project-editor/flow/runtime/wasm/eez_runtime.js");
 
 ////////////////////////////////////////////////////////////////////////////////
 
@@ -93,7 +94,7 @@ function executeScpi(
     ]);
     if (!result) {
         WasmFlowRuntime._onScpiResult(
-            WasmFlowRuntime.allocateUTF8("Invalid instrument"),
+            WasmFlowRuntime.stringToNewUTF8("Invalid instrument"),
             0,
             0,
             0
@@ -562,6 +563,28 @@ function getLvglImageByName(wasmModuleId: number, name: string) {
     });
 }
 
+function getLvglFontByName(wasmModuleId: number, name: string) {
+    const WasmFlowRuntime = getWasmFlowRuntime(wasmModuleId);
+    if (!WasmFlowRuntime) {
+        return;
+    }
+
+    return WasmFlowRuntime.postWorkerToRendererMessage({
+        getLvglFontByName: { name }
+    });
+}
+
+function getLvglObjectNameFromIndex(wasmModuleId: number, index: number) {
+    const WasmFlowRuntime = getWasmFlowRuntime(wasmModuleId);
+    if (!WasmFlowRuntime) {
+        return;
+    }
+
+    return WasmFlowRuntime.postWorkerToRendererMessage({
+        getLvglObjectNameFromIndex: { index }
+    });
+}
+
 function lvglObjAddStyle(
     wasmModuleId: number,
     targetObj: number,
@@ -688,6 +711,8 @@ function lvglOnEventHandler(
 (global as any).getLvglGroupByName = getLvglGroupByName;
 (global as any).getLvglStyleByName = getLvglStyleByName;
 (global as any).getLvglImageByName = getLvglImageByName;
+(global as any).getLvglFontByName = getLvglFontByName;
+(global as any).getLvglObjectNameFromIndex = getLvglObjectNameFromIndex;
 (global as any).lvglObjAddStyle = lvglObjAddStyle;
 (global as any).lvglObjRemoveStyle = lvglObjRemoveStyle;
 (global as any).lvglSetColorTheme = lvglSetColorTheme;
@@ -702,7 +727,7 @@ export function createWasmWorker(
     wasmModuleId: number,
     debuggerMessageSubsciptionFilter: number,
     postWorkerToRenderMessage: (data: WorkerToRenderMessage) => void,
-    lvglVersion: "8.3" | "9.0" | undefined,
+    lvglVersion: LVGLVersion | undefined,
     displayWidth: number,
     displayHeight: number,
     darkTheme: boolean,
@@ -859,7 +884,7 @@ export function createWasmWorker(
             let blob = 0;
 
             if (rendererToWorkerMessage.scpiResult.errorMessage) {
-                errorMessagePtr = WasmFlowRuntime.allocateUTF8(
+                errorMessagePtr = WasmFlowRuntime.stringToNewUTF8(
                     rendererToWorkerMessage.scpiResult.errorMessage
                 );
             } else {
@@ -934,8 +959,6 @@ export function createWasmWorker(
         }
 
         if (rendererToWorkerMessage.init) {
-            console.log(rendererToWorkerMessage.init);
-
             WasmFlowRuntime.assetsMap = rendererToWorkerMessage.init.assetsMap;
 
             //
@@ -1207,11 +1230,11 @@ export function sendMqttEvent(
     let eventDataPtr2;
     if (eventData != null) {
         if (typeof eventData == "string") {
-            eventDataPtr1 = WasmFlowRuntime.allocateUTF8(eventData);
+            eventDataPtr1 = WasmFlowRuntime.stringToNewUTF8(eventData);
             eventDataPtr2 = 0;
         } else {
-            eventDataPtr1 = WasmFlowRuntime.allocateUTF8(eventData.topic);
-            eventDataPtr2 = WasmFlowRuntime.allocateUTF8(eventData.payload);
+            eventDataPtr1 = WasmFlowRuntime.stringToNewUTF8(eventData.topic);
+            eventDataPtr2 = WasmFlowRuntime.stringToNewUTF8(eventData.payload);
         }
     } else {
         eventDataPtr1 = 0;

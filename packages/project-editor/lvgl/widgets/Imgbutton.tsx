@@ -104,7 +104,7 @@ export class LVGLImgbuttonWidget extends LVGLWidget {
         ),
 
         check: (widget: LVGLImgbuttonWidget, messages: IMessage[]) => {
-            // checkWidgetTypeLvglVersion(widget, messages, "8.3");
+            // checkWidgetTypeLvglVersion(widget, messages, "8.");
 
             if (widget.imageReleased) {
                 const bitmap = findBitmap(
@@ -251,7 +251,7 @@ export class LVGLImgbuttonWidget extends LVGLWidget {
         if (this.imageCheckedReleased) {
             code.callObjectFunction(
                 setSrcFuncName,
-                code.constant(prefix + "CHECKED_PRESSED"),
+                code.constant(prefix + "CHECKED_RELEASED"),
                 code.constant("NULL"),
                 code.image(this.imageCheckedReleased),
                 code.constant("NULL")
@@ -260,7 +260,7 @@ export class LVGLImgbuttonWidget extends LVGLWidget {
         if (this.imageCheckedPressed) {
             code.callObjectFunction(
                 setSrcFuncName,
-                code.constant(prefix + "CHECKED_RELEASED"),
+                code.constant(prefix + "CHECKED_PRESSED"),
                 code.constant("NULL"),
                 code.image(this.imageCheckedPressed),
                 code.constant("NULL")

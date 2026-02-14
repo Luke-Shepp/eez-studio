@@ -178,6 +178,15 @@ function loadObjectInternal(
             ? JSON.parse(jsObjectOrString)
             : jsObjectOrString;
 
+    if (isLoadProject && aClass == ProjectEditor.ProjectClass) {
+        let projectFeatures = ProjectEditor.extensions;
+        for (let projectFeature of projectFeatures) {
+            if (projectFeature.fromJsHook) {
+                projectFeature.fromJsHook(jsObject);
+            }
+        }
+    }
+
     if (isArray(jsObject)) {
         return loadArrayObject(jsObject, parent, {
             type: PropertyType.Array,
@@ -478,6 +487,17 @@ export function rewireEnd(object: IEezObject) {
                     connectionLine.output == wireSourceChanged.oldSourceName
                 ) {
                     connectionLine.output = wireSourceChanged.newSourceName;
+                }
+            }
+        }
+    }
+
+    for (const componentGroup of visitObjects(object)) {
+        if (componentGroup instanceof ProjectEditor.ComponentGroupClass) {
+            for (let i = 0; i < componentGroup.components.length; i++) {
+                const newID = oldObjID_to_newObjID.get(componentGroup.components[i]);
+                if (newID != undefined) {
+                    componentGroup.components[i] = newID;
                 }
             }
         }

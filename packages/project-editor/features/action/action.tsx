@@ -11,7 +11,8 @@ import {
     MessageType,
     EezObject,
     IMessage,
-    PropertyProps
+    PropertyProps,
+    getId
 } from "project-editor/core/object";
 import { createObject, Message } from "project-editor/store";
 import {
@@ -27,6 +28,7 @@ import { getProjectStore } from "project-editor/store";
 import { Flow } from "project-editor/flow/flow";
 import { IFlowContext } from "project-editor/flow/flow-interfaces";
 import { ComponentsContainerEnclosure } from "project-editor/flow/editor/render";
+import { ComponentGroupRenderer } from "project-editor/flow/editor/ComponentGroupRenderer";
 import { ProjectEditor } from "project-editor/project-editor-interface";
 import {
     generalGroup,
@@ -96,8 +98,7 @@ export const NativeActionImplementationInfoPropertyUI = observer(
             build.line("");
 
             build.line(
-                `${
-                    this.implementationLanguage == "C++" ? `extern "C" ` : ""
+                `${this.implementationLanguage == "C++" ? `extern "C" ` : ""
                 }void ${"action_" + actionName}(lv_event_t *e) {`
             );
             build.indent();
@@ -153,7 +154,7 @@ export const NativeActionImplementationInfoPropertyUI = observer(
                         ref={this.codeEditorRef}
                         mode="c_cpp"
                         value={code}
-                        onChange={() => {}}
+                        onChange={() => { }}
                         readOnly={true}
                         className="form-control"
                         minLines={2}
@@ -223,9 +224,11 @@ export class Action extends Flow {
                 enumDisallowUndefined: true,
                 propertyGridGroup: specificGroup,
                 disabled: (action: Action) => {
+                    const projectStore = getProjectStore(action);
                     return (
                         (isNotV1Project(action) && !hasFlowSupport(action)) ||
-                        isDashboardProject(action)
+                        isDashboardProject(action) ||
+                        projectStore.masterProject != null
                     );
                 }
             },
@@ -328,13 +331,16 @@ export class Action extends Flow {
                             ],
                             visible: () =>
                                 !projectStore.projectTypeTraits.isDashboard &&
-                                projectStore.projectTypeTraits.hasFlowSupport
+                                projectStore.projectTypeTraits.hasFlowSupport &&
+                                !projectStore.masterProject
                         }
                     ]
                 },
                 values: {
                     implementationType: "flow"
-                }
+                },
+                modal: true,
+                backdrop: "static"
             });
 
             const actionProperties: Partial<Action> = Object.assign(
@@ -376,11 +382,22 @@ export class Action extends Flow {
 
     renderActionComponents(flowContext: IFlowContext) {
         return (
-            <ComponentsContainerEnclosure
-                parent={this}
-                components={this.components}
-                flowContext={flowContext}
-            />
+            <>
+                {/* Render component groups first (behind components) */}
+                {this.componentGroups.map(group => (
+                    <ComponentGroupRenderer
+                        key={getId(group)}
+                        group={group}
+                        flowContext={flowContext}
+                    />
+                ))}
+
+                <ComponentsContainerEnclosure
+                    parent={this}
+                    components={this.components}
+                    flowContext={flowContext}
+                />
+            </>
         );
     }
 }

@@ -781,7 +781,9 @@ export class CustomInput extends EezObject implements ComponentInput {
                     ]
                 },
                 values: {},
-                dialogContext: ProjectEditor.getProject(parent)
+                dialogContext: ProjectEditor.getProject(parent),
+                modal: true,
+                backdrop: "static"
             });
 
             const customInputProperties: Partial<CustomInput> = {
@@ -908,7 +910,9 @@ export class CustomOutput extends EezObject implements ComponentOutput {
                     ]
                 },
                 values: {},
-                dialogContext: ProjectEditor.getProject(parent)
+                dialogContext: ProjectEditor.getProject(parent),
+                modal: true,
+                backdrop: "static"
             });
 
             const customOutputProperties: Partial<CustomOutput> = {
@@ -1734,6 +1738,14 @@ export class Component extends EezObject {
 
         properties: [
             {
+                name: "geometryProperties",
+                type: PropertyType.Any,
+                propertyGridGroup: geometryGroup,
+                computed: true,
+                skipSearch: true,
+                hideInPropertyGrid: true
+            },
+            {
                 name: "type",
                 type: PropertyType.Enum,
                 hideInPropertyGrid: true,
@@ -2196,6 +2208,9 @@ export class Component extends EezObject {
             if (!keepConnectionLines) {
                 flow.deleteConnectionLines(component);
             }
+
+            // Remove component from any groups it belongs to
+            flow.removeComponentFromGroups(component);
         },
 
         objectsToClipboardData: (components: Component[]) => {
@@ -2696,7 +2711,9 @@ export class EventHandler extends EezObject {
                 dialogContext: project,
                 setOnChangeCallback: callback => {
                     onChangeCallback = callback;
-                }
+                },
+                modal: true,
+                backdrop: "static"
             });
 
             const properties: Partial<EventHandler> = {

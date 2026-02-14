@@ -42,6 +42,7 @@ import { Loader } from "eez-studio-ui/loader";
 import {
     AbsoluteFileInputProperty,
     BooleanProperty,
+    InputProperty,
     PropertyList,
     SelectProperty,
     StaticProperty
@@ -140,6 +141,9 @@ class SettingsController {
     pythonUseCustomPath: boolean = false;
     pythonCustomPath: string = "";
 
+    useLocalTemplates: boolean = false;
+    localTemplatesPath: string = "";
+
     _showComponentsPaletteInProjectEditor: boolean =
         getShowComponentsPaletteInProjectEditor();
 
@@ -150,6 +154,13 @@ class SettingsController {
                 : false;
         this.pythonCustomPath =
             window.localStorage.getItem("pythonCustomPath") ?? "";
+
+        this.useLocalTemplates =
+            window.localStorage.getItem("useLocalTemplates") == "1"
+                ? true
+                : false;
+        this.localTemplatesPath =
+            window.localStorage.getItem("localTemplatesPath") ?? "";
 
         this.selectedDatabase = instrumentDatabases.activeDatabase;
 
@@ -167,7 +178,9 @@ class SettingsController {
             switchTheme: action.bound,
             removeItemFromMRU: action,
             pythonUseCustomPath: observable,
-            pythonCustomPath: observable
+            pythonCustomPath: observable,
+            useLocalTemplates: observable,
+            localTemplatesPath: observable
         });
 
         this.onThemeSwitched();
@@ -185,6 +198,23 @@ class SettingsController {
                 window.localStorage.setItem(
                     "pythonCustomPath",
                     customPythonPath
+                );
+            }
+        );
+
+        reaction(
+            () => ({
+                useLocalTemplates: this.useLocalTemplates,
+                localTemplatesPath: this.localTemplatesPath
+            }),
+            ({ useLocalTemplates, localTemplatesPath }) => {
+                window.localStorage.setItem(
+                    "useLocalTemplates",
+                    useLocalTemplates ? "1" : "0"
+                );
+                window.localStorage.setItem(
+                    "localTemplatesPath",
+                    localTemplatesPath
                 );
             }
         );
@@ -233,6 +263,11 @@ class SettingsController {
         ) as HTMLDivElement;
         content.style.opacity = "0";
 
+        const body = document.querySelector("#EezStudio_Content>.EezStudio_HeaderWithBody>.EezStudio_Body");
+        if (body && body instanceof HTMLDivElement && body.style) {
+            body.style.display = "none";
+        }
+
         const mainLinkElement = document.getElementById(
             "main-css"
         ) as HTMLLinkElement;
@@ -259,9 +294,13 @@ class SettingsController {
         }
 
         this.onThemeSwitchedTimeout = setTimeout(() => {
+            if (body && body instanceof HTMLDivElement && body.style) {
+                body.style.display = "flex";
+            }
+
             this.onThemeSwitchedTimeout = undefined;
             content.style.opacity = "";
-        }, 500);
+        }, 50);
     }
 
     removeItemFromMRU(mruItem: IMruItem) {
@@ -765,9 +804,7 @@ const Databases = observer(
         render() {
             return (
                 <tr>
-                    <td>Databases</td>
-
-                    <td>
+                    <td colSpan={2}>
                         <div className="EezStudio_Settings_Databases">
                             <FlexLayoutContainer
                                 model={homeLayoutModels.databaseSettings}
@@ -860,13 +897,130 @@ const PythonSettings = observer(
 
 ////////////////////////////////////////////////////////////////////////////////
 
+class AbsoluteDirectoryInputProperty extends React.Component<
+    {
+        name?: string;
+        value: string;
+        onChange: (value: string) => void;
+    },
+    {}
+> {
+    onSelect = async () => {
+        const result = await dialog.showOpenDialog(getCurrentWindow(), {
+            properties: ["openDirectory"]
+        });
+
+        if (result.filePaths && result.filePaths[0]) {
+            this.props.onChange(result.filePaths[0]);
+        }
+    };
+
+    render() {
+        return (
+            <InputProperty
+                name={this.props.name}
+                value={this.props.value}
+                onChange={this.props.onChange}
+                type="text"
+                inputGroupButton={
+                    <button
+                        className="btn btn-secondary"
+                        type="button"
+                        onClick={this.onSelect}
+                    >
+                        &hellip;
+                    </button>
+                }
+            />
+        );
+    }
+}
+
+const EEZ_PROJECT_TEMPLATES_REPO_URL =
+    "https://github.com/eez-open/eez-project-templates";
+
+const TemplateSettings = observer(
+    class TemplateSettings extends React.Component {
+        render() {
+            return (
+                <tr>
+                    <td>Project Templates</td>
+                    <td>
+                        <PropertyList>
+                            <BooleanProperty
+                                name={`Use local templates folder`}
+                                value={settingsController.useLocalTemplates}
+                                onChange={action(
+                                    value =>
+                                        (settingsController.useLocalTemplates =
+                                            value)
+                                )}
+                                checkboxStyleSwitch={true}
+                            />
+                            {settingsController.useLocalTemplates && (
+                                <>
+                                    <AbsoluteDirectoryInputProperty
+                                        name="Local templates path"
+                                        value={
+                                            settingsController.localTemplatesPath
+                                        }
+                                        onChange={action(value => {
+                                            settingsController.localTemplatesPath =
+                                                value;
+                                        })}
+                                    />
+                                    <tr>
+                                        <td>Repository</td>
+                                        <td>
+                                            <a
+                                                href="#"
+                                                onClick={e => {
+                                                    e.preventDefault();
+                                                    shell.openExternal(
+                                                        EEZ_PROJECT_TEMPLATES_REPO_URL
+                                                    );
+                                                }}
+                                            >
+                                                {EEZ_PROJECT_TEMPLATES_REPO_URL}
+                                            </a>
+                                        </td>
+                                    </tr>
+                                </>
+                            )}
+                        </PropertyList>
+                    </td>
+                </tr>
+            );
+        }
+    }
+);
+
+////////////////////////////////////////////////////////////////////////////////
+
+const SettingsSectionHeader = ({
+    title
+}: {
+    title: string;
+}) => (
+    <tr className="EezStudio_SettingsSectionHeader">
+        <td colSpan={2}>
+            <h5>{title}</h5>
+        </td>
+    </tr>
+);
+
+////////////////////////////////////////////////////////////////////////////////
+
 export const Settings = observer(
     class Settings extends React.Component {
         render() {
             return (
                 <div className="EezStudio_HomeSettingsBody">
                     <PropertyList>
+                        <SettingsSectionHeader title="Databases" />
                         <Databases />
+
+                        <SettingsSectionHeader title="Localization" />
                         <SelectProperty
                             name="Locale"
                             value={settingsController.locale}
@@ -918,7 +1072,14 @@ export const Settings = observer(
                                 </option>
                             ))}
                         </SelectProperty>
+
+                        <SettingsSectionHeader title="External Tools" />
                         <PythonSettings />
+
+                        <SettingsSectionHeader title="Project Editor" />
+                        <TemplateSettings />
+
+                        <SettingsSectionHeader title="Appearance" />
                         <BooleanProperty
                             name={`Dark theme`}
                             value={settingsController.isDarkTheme}

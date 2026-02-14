@@ -14,13 +14,6 @@ async function getExtraResource() {
         to: path.basename(extraResourcePath)
     }));
 
-    let lvImgConv9 = (
-        await fs.promises.readdir("./resources/lv_img_conv_9")
-    ).map(file => ({
-        from: "./resources/lv_img_conv_9/" + file,
-        to: "lv_img_conv_9/" + file
-    }));
-
     let eezframeworkAmalgamation = (
         await fs.promises.readdir("./resources/eez-framework-amalgamation")
     ).map(file => ({
@@ -28,10 +21,17 @@ async function getExtraResource() {
         to: "eez-framework-amalgamation/" + file
     }));
 
+    let dockerBuild = (
+        await fs.promises.readdir("./resources/docker-build")
+    ).map(file => ({
+        from: "./resources/docker-build/" + file,
+        to: "docker-build/" + file
+    }));
+
     return [
         ...extraResources,
-        ...lvImgConv9,
         ...eezframeworkAmalgamation,
+        ...dockerBuild,
         ...[
             {
                 from: "./LICENSE.TXT",

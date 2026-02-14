@@ -25,14 +25,14 @@ import {
     PropertyInfo,
     getProperty,
     PropertyProps,
-    isPropertyDisabled
+    isPropertyDisabled,
+    getParent
 } from "project-editor/core/object";
 import {
     getChildOfObject,
     Message,
     propertyNotSetMessage,
     createObject,
-    isEezObjectArray,
     getAncestorOfType,
     findPropertyByNameInObject
 } from "project-editor/store";
@@ -218,34 +218,30 @@ export const NativeVariableImplementationInfoPropertyUI = observer(
             build.line("");
 
             build.line(
-                `${
-                    variable.type == "string"
-                        ? this.implementationLanguage == "C"
-                            ? "char "
-                            : "std::string "
-                        : nativeType
-                }${variableName}${
-                    variable.type == "string" &&
+                `${variable.type == "string"
+                    ? this.implementationLanguage == "C"
+                        ? "char "
+                        : "std::string "
+                    : nativeType
+                }${variableName}${variable.type == "string" &&
                     this.implementationLanguage == "C"
-                        ? "[100] = { 0 }"
-                        : ""
+                    ? "[100] = { 0 }"
+                    : ""
                 };`
             );
 
             build.line("");
 
             build.line(
-                `${
-                    this.implementationLanguage == "C++" ? `extern "C" ` : ""
+                `${this.implementationLanguage == "C++" ? `extern "C" ` : ""
                 }${nativeType}${"get_var_" + variableName}() {`
             );
             build.indent();
             build.line(
-                `return ${variableName}${
-                    variable.type == "string" &&
+                `return ${variableName}${variable.type == "string" &&
                     this.implementationLanguage == "C++"
-                        ? ".c_str()"
-                        : ""
+                    ? ".c_str()"
+                    : ""
                 };`
             );
             build.unindent();
@@ -254,8 +250,7 @@ export const NativeVariableImplementationInfoPropertyUI = observer(
             build.line("");
 
             build.line(
-                `${
-                    this.implementationLanguage == "C++" ? `extern "C" ` : ""
+                `${this.implementationLanguage == "C++" ? `extern "C" ` : ""
                 }void ${"set_var_" + variableName}(${nativeType}value) {`
             );
             build.indent();
@@ -302,8 +297,8 @@ export const NativeVariableImplementationInfoPropertyUI = observer(
                                 className="form-select"
                                 value={this.implementationLanguage}
                                 onChange={event =>
-                                    (this.implementationLanguage =
-                                        event.target.value)
+                                (this.implementationLanguage =
+                                    event.target.value)
                                 }
                             >
                                 <option value="C">C</option>
@@ -323,7 +318,7 @@ export const NativeVariableImplementationInfoPropertyUI = observer(
                         ref={this.codeEditorRef}
                         mode="c_cpp"
                         value={code}
-                        onChange={() => {}}
+                        onChange={() => { }}
                         readOnly={true}
                         className="form-control"
                         minLines={2}
@@ -424,7 +419,9 @@ export class Variable extends EezObject {
                         variable
                     ).projectTypeTraits.isVariableTypeSupportedAsNative(
                         variable.type
-                    ),
+                    ) || ProjectEditor.getProject(
+                        variable
+                    ).masterProject != null,
                 checkboxStyleSwitch: true
             },
             {
@@ -519,9 +516,8 @@ export class Variable extends EezObject {
             );
         },
         propertiesPanelLabel: (variable: Variable) => {
-            return `${
-                ProjectEditor.getFlow(variable) ? "Local" : "Global"
-            } variable: ${variable.name}`;
+            return `${ProjectEditor.getFlow(variable) ? "Local" : "Global"
+                } variable: ${variable.name}`;
         },
         beforeLoadHook: (object: Variable, objectJS: any) => {
             migrateType(objectJS);
@@ -537,7 +533,7 @@ export class Variable extends EezObject {
                         parent
                     ).projectTypeTraits.isVariableTypeSupportedAsNative(
                         values.type
-                    )
+                    ) && project.masterProject == null
                 );
             }
 
@@ -580,7 +576,9 @@ export class Variable extends EezObject {
                     ]
                 },
                 values: {},
-                dialogContext: ProjectEditor.getProject(parent)
+                dialogContext: ProjectEditor.getProject(parent),
+                modal: true,
+                backdrop: "static"
             });
 
             let persistent =
@@ -1076,7 +1074,7 @@ export class DataContext implements IDataContext {
                 const valueJS = toJS(value);
                 JSON.stringify(valueJS);
                 runtimeValues[name] = valueJS;
-            } catch (err) {}
+            } catch (err) { }
         }
 
         return {
@@ -1181,7 +1179,9 @@ export class StructureField extends EezObject implements IStructureField {
                     ]
                 },
                 values: {},
-                dialogContext: ProjectEditor.getProject(parent)
+                dialogContext: ProjectEditor.getProject(parent),
+                modal: true,
+                backdrop: "static"
             });
 
             const structureFieldProperties: Partial<StructureField> = {
@@ -1257,7 +1257,9 @@ export class Structure extends EezObject implements IStructure {
                         }
                     ]
                 },
-                values: {}
+                values: {},
+                modal: true,
+                backdrop: "static"
             });
 
             const structureProperties: Partial<Structure> = {
@@ -1316,7 +1318,8 @@ export interface IEnumMember {
 
 export class EnumMember extends EezObject implements IEnumMember {
     name: string;
-    value: number;
+    automaticValue: boolean;
+    specificValue: number;
 
     static classInfo: ClassInfo = {
         properties: [
@@ -1326,8 +1329,23 @@ export class EnumMember extends EezObject implements IEnumMember {
                 uniqueIdentifier: true
             },
             {
+                name: "automaticValue",
+                type: PropertyType.Boolean,
+                checkboxStyleSwitch: true
+            },
+            {
+                name: "specificValue",
+                displayName: "Value",
+                type: PropertyType.Number,
+                disabled: (enumMember: EnumMember) => enumMember.automaticValue
+            },
+            {
                 name: "value",
-                type: PropertyType.Number
+                displayName: "Value",
+                type: PropertyType.Number,
+                computed: true,
+                readOnlyInPropertyGrid: true,
+                disabled: (enumMember: EnumMember) => !enumMember.automaticValue
             }
         ],
         listLabel: (member: EnumMember, collapsed: boolean) =>
@@ -1337,11 +1355,33 @@ export class EnumMember extends EezObject implements IEnumMember {
                 messages.push(propertyNotSetMessage(enumMember, "name"));
             }
 
-            if (enumMember.value == undefined) {
+            if (!enumMember.automaticValue && enumMember.value == undefined) {
                 messages.push(propertyNotSetMessage(enumMember, "value"));
             }
         },
         defaultValue: {},
+        beforeLoadHook(object, jsObject, project) {
+            if (jsObject.value !== undefined) {
+                jsObject.specificValue = jsObject.value;
+                delete jsObject.value;
+            }
+
+            if (jsObject.automaticValue === undefined) {
+                jsObject.automaticValue = false;
+            }
+        },
+        updateObjectValueHook: (enumMember: EnumMember, values: any) => {
+            const project = ProjectEditor.getProject(enumMember);
+            if (!values.automaticValue && values.specificValue == undefined) {
+                project._store.updateObject(enumMember, {
+                    specificValue: enumMember.value
+                });
+            } else if (values.automaticValue && values.specificValue != undefined) {
+                project._store.updateObject(enumMember, {
+                    specificValue: undefined
+                });
+            }
+        },
         newItem: async (parent: IEezObject) => {
             const result = await showGenericDialog({
                 dialogDefinition: {
@@ -1358,15 +1398,15 @@ export class EnumMember extends EezObject implements IEnumMember {
                         }
                     ]
                 },
-                values: {}
+                values: {},
+                modal: true,
+                backdrop: "static"
             });
 
             const enumMemberProperties: Partial<EnumMember> = {
                 name: result.values.name,
-                value:
-                    isEezObjectArray(parent) && parent.length > 0
-                        ? (parent[parent.length - 1] as EnumMember).value + 1
-                        : 0
+                specificValue: undefined,
+                automaticValue: true
             };
 
             const project = ProjectEditor.getProject(parent);
@@ -1386,8 +1426,22 @@ export class EnumMember extends EezObject implements IEnumMember {
 
         makeObservable(this, {
             name: observable,
-            value: observable
+            automaticValue: observable,
+            specificValue: observable,
+            value: computed
         });
+    }
+
+    get value(): number {
+        if (!this.automaticValue) {
+            return this.specificValue;
+        }
+        const parentArray = getParent(this) as EnumMember[];
+        const index = parentArray.indexOf(this);
+        if (index > 0) {
+            return parentArray[index - 1].value + 1;
+        }
+        return 0;
     }
 }
 
@@ -1461,7 +1515,9 @@ export class Enum extends EezObject implements IEnum {
                         }
                     ]
                 },
-                values: {}
+                values: {},
+                modal: true,
+                backdrop: "static"
             });
 
             const enumProperties: Partial<Enum> = {

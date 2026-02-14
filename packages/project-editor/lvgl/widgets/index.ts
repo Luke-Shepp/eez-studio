@@ -89,8 +89,13 @@ import {
     LVGL_STATE_CODES,
     LV_STATE_ENUM_NAME,
     LV_BUTTONMATRIX_CTRL_ENUM_NAME,
-    LV_BUTTONMATRIX_CTRL
+    LV_BUTTONMATRIX_CTRL,
+    LV_PART_ENUM_NAME,
+    LVGL_PARTS_8,
+    LVGL_PARTS_9,
+    LVGL_STATE_CODES_MORE
 } from "../lvgl-constants";
+import type { LVGLVersion } from "project-editor/project/project";
 
 ////////////////////////////////////////////////////////////////////////////////
 
@@ -163,7 +168,7 @@ registerClass("LVGLWindowWidget", LVGLWindowWidget);
 export function registerLvglEnum(
     enumName: string,
     members: { [key: string]: number },
-    lvglVersion?: "8.3" | "9.0"
+    lvglVersions?: LVGLVersion[]
 ) {
     registerSystemEnum({
         name: enumName,
@@ -172,7 +177,7 @@ export function registerLvglEnum(
             value: members[key]
         })),
         projectTypes: [ProjectType.LVGL],
-        lvglVersion
+        lvglVersions
     });
 }
 
@@ -244,7 +249,7 @@ registerLvglEnum(
         FLOATING: LVGL_FLAG_CODES.FLOATING,
         OVERFLOW_VISIBLE: LVGL_FLAG_CODES.OVERFLOW_VISIBLE
     },
-    "8.3"
+    ["8.4.0"]
 );
 
 registerLvglEnum(
@@ -271,15 +276,55 @@ registerLvglEnum(
         FLOATING: LVGL_FLAG_CODES_90.FLOATING,
         OVERFLOW_VISIBLE: LVGL_FLAG_CODES_90.OVERFLOW_VISIBLE
     },
-    "9.0"
+    ["9.2.2", "9.3.0", "9.4.0"]
 );
 
 registerLvglEnum(LV_STATE_ENUM_NAME, {
+    DEFAULT: LVGL_STATE_CODES_MORE.DEFAULT,
     CHECKED: LVGL_STATE_CODES.CHECKED,
-    DISABLED: LVGL_STATE_CODES.DISABLED,
     FOCUSED: LVGL_STATE_CODES.FOCUSED,
     FOCUS_KEY: LVGL_STATE_CODES.FOCUS_KEY,
-    PRESSED: LVGL_STATE_CODES.PRESSED
+    EDITED: LVGL_STATE_CODES_MORE.EDITED,
+    HOVERED: LVGL_STATE_CODES_MORE.HOVERED,
+    PRESSED: LVGL_STATE_CODES.PRESSED,
+    SCROLLED: LVGL_STATE_CODES_MORE.SCROLLED,
+    DISABLED: LVGL_STATE_CODES.DISABLED,
+    USER1: LVGL_STATE_CODES_MORE.USER1,
+    USER2: LVGL_STATE_CODES_MORE.USER2,
+    USER3: LVGL_STATE_CODES_MORE.USER3,
+    USER4: LVGL_STATE_CODES_MORE.USER4,
+    ALL: LVGL_STATE_CODES_MORE.ALL,
 });
 
 registerLvglEnum(LV_BUTTONMATRIX_CTRL_ENUM_NAME, LV_BUTTONMATRIX_CTRL);
+
+registerLvglEnum(LV_PART_ENUM_NAME, {
+    MAIN: LVGL_PARTS_8.MAIN,
+    SCROLLBAR: LVGL_PARTS_8.SCROLLBAR,
+    INDICATOR: LVGL_PARTS_8.INDICATOR,
+    KNOB: LVGL_PARTS_8.KNOB,
+    SELECTED: LVGL_PARTS_8.SELECTED,
+    ITEMS: LVGL_PARTS_8.ITEMS,
+    TICKS: LVGL_PARTS_8.TICKS,
+    CURSOR: LVGL_PARTS_8.CURSOR,
+
+    CUSTOM1: LVGL_PARTS_8.CUSTOM1,
+    TEXTAREA_PLACEHOLDER: LVGL_PARTS_8.TEXTAREA_PLACEHOLDER,
+
+    ANY: LVGL_PARTS_8.ANY
+}, ["8.4.0"]);
+
+registerLvglEnum(LV_PART_ENUM_NAME, {
+    MAIN: LVGL_PARTS_9.MAIN,
+    SCROLLBAR: LVGL_PARTS_9.SCROLLBAR,
+    INDICATOR: LVGL_PARTS_9.INDICATOR,
+    KNOB: LVGL_PARTS_9.KNOB,
+    SELECTED: LVGL_PARTS_9.SELECTED,
+    ITEMS: LVGL_PARTS_9.ITEMS,
+    CURSOR: LVGL_PARTS_9.CURSOR,
+    
+    CUSTOM1: LVGL_PARTS_9.CUSTOM1,
+    TEXTAREA_PLACEHOLDER: LVGL_PARTS_9.TEXTAREA_PLACEHOLDER,
+
+    ANY: LVGL_PARTS_9.ANY
+}, ["9.2.2", "9.3.0", "9.4.0"]);

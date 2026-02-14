@@ -1,6 +1,7 @@
 import React from "react";
 import { observable, computed, makeObservable } from "mobx";
 import classNames from "classnames";
+import { observer } from "mobx-react";
 
 import { to16bitsColor } from "eez-studio-shared/color";
 
@@ -16,7 +17,9 @@ import {
     MessageType,
     PropertyInfo,
     getProperty,
-    IMessage
+    IMessage,
+    PropertyProps,
+    findPropertyByNameInClassInfo
 } from "project-editor/core/object";
 import {
     createObject,
@@ -44,6 +47,7 @@ import type {
     IResizeHandler,
     IFlowContext
 } from "project-editor/flow/flow-interfaces";
+import { ComponentGroupRenderer } from "project-editor/flow/editor/ComponentGroupRenderer";
 import {
     ComponentsContainerEnclosure,
     ComponentEnclosure,
@@ -75,6 +79,8 @@ import type { LVGLWidget } from "project-editor/lvgl/widgets";
 import { lvglBuildPageTimeline } from "project-editor/flow/timeline";
 import type { ProjectEditorFeature } from "project-editor/store/features";
 import { PAGES_ICON } from "project-editor/ui-components/icons";
+import { ProjectContext } from "project-editor/project/context";
+import { Property } from "project-editor/ui-components/PropertyGrid/Property";
 
 export const FLOW_FRAGMENT_PAGE_NAME = "$FlowFragment";
 
@@ -188,6 +194,73 @@ export class PageOrientation extends EezObject {
 }
 
 registerClass("PageOrientation", PageOrientation);
+
+////////////////////////////////////////////////////////////////////////////////
+
+export const GeometryProperties = observer(
+    class GeometryProperties extends React.Component<PropertyProps> {
+        static contextType = ProjectContext;
+        declare context: React.ContextType<typeof ProjectContext>;
+
+        render() {
+            return (
+                <div className="EezStudio_LVGLPageGeometryProperty">
+                    <div>X</div>
+                    <Property
+                        propertyInfo={
+                            findPropertyByNameInClassInfo(
+                                Page.classInfo,
+                                "left"
+                            )!
+                        }
+                        objects={this.props.objects}
+                        readOnly={this.props.readOnly}
+                        updateObject={this.props.updateObject}
+                    />
+
+                    <div>Y</div>
+                    <Property
+                        propertyInfo={
+                            findPropertyByNameInClassInfo(
+                                Page.classInfo,
+                                "top"
+                            )!
+                        }
+                        objects={this.props.objects}
+                        readOnly={this.props.readOnly}
+                        updateObject={this.props.updateObject}
+                    />
+
+                    <div title="Width">W</div>
+                    <Property
+                        propertyInfo={
+                            findPropertyByNameInClassInfo(
+                                Page.classInfo,
+                                "width"
+                            )!
+                        }
+                        objects={this.props.objects}
+                        readOnly={this.props.readOnly}
+                        updateObject={this.props.updateObject}
+                    />
+
+                    <div title="Height">H</div>
+                    <Property
+                        propertyInfo={
+                            findPropertyByNameInClassInfo(
+                                Page.classInfo,
+                                "height"
+                            )!
+                        }
+                        objects={this.props.objects}
+                        readOnly={this.props.readOnly}
+                        updateObject={this.props.updateObject}
+                    />
+                </div>
+            );
+        }
+    }
+);
 
 ////////////////////////////////////////////////////////////////////////////////
 
@@ -340,22 +413,35 @@ export class Page extends Flow {
             {
                 name: "left",
                 type: PropertyType.Number,
-                propertyGridGroup: geometryGroup
+                propertyGridGroup: geometryGroup,
+                hideInPropertyGrid: isLVGLProject
             },
             {
                 name: "top",
                 type: PropertyType.Number,
-                propertyGridGroup: geometryGroup
+                propertyGridGroup: geometryGroup,
+                hideInPropertyGrid: isLVGLProject
             },
             {
                 name: "width",
                 type: PropertyType.Number,
-                propertyGridGroup: geometryGroup
+                propertyGridGroup: geometryGroup,
+                hideInPropertyGrid: isLVGLProject
             },
             {
                 name: "height",
                 type: PropertyType.Number,
-                propertyGridGroup: geometryGroup
+                propertyGridGroup: geometryGroup,
+                hideInPropertyGrid: isLVGLProject
+            },
+            {
+                name: "geometryProperties",
+                type: PropertyType.Any,
+                propertyGridGroup: geometryGroup,
+                computed: true,
+                propertyGridRowComponent: GeometryProperties,
+                skipSearch: true,
+                disabled: isNotLVGLProject
             },
             {
                 name: "scaleToFit",
@@ -452,12 +538,12 @@ export class Page extends Flow {
                     jsObject.width = Math.floor(
                         (jsObject.width *
                             __eezProjectMigration.displayTargetWidth) /
-                            __eezProjectMigration.displaySourceWidth
+                        __eezProjectMigration.displaySourceWidth
                     );
                     jsObject.height = Math.floor(
                         (jsObject.height *
                             __eezProjectMigration.displayTargetHeight) /
-                            __eezProjectMigration.displaySourceHeight
+                        __eezProjectMigration.displaySourceHeight
                     );
                 }
             }
@@ -587,10 +673,12 @@ export class Page extends Flow {
                 values: {
                     name:
                         parent == project.userPages &&
-                        project.userPages.length == 0
+                            project.userPages.length == 0
                             ? "Main"
                             : ""
-                }
+                },
+                modal: true,
+                backdrop: "static"
             });
 
             const pageProperties: Partial<Page> = {
@@ -600,11 +688,11 @@ export class Page extends Flow {
                 width: project.projectTypeTraits.isDashboard
                     ? 800
                     : project._store.project.settings.general.displayWidth ??
-                      480,
+                    480,
                 height: project.projectTypeTraits.isDashboard
                     ? 450
                     : project._store.project.settings.general.displayHeight ??
-                      272,
+                    272,
                 components: [],
                 isUsedAsUserWidget: parent == project.userWidgets
             };
@@ -649,8 +737,7 @@ export class Page extends Flow {
             }
 
             if (
-                projectStore.projectTypeTraits.hasDisplaySizeProperty &&
-                !page.isUsedAsUserWidget
+                projectStore.projectTypeTraits.hasDisplaySizeProperty && !page.isUsedAsUserWidget && !projectStore.projectTypeTraits.isFirmware
             ) {
                 const isSimulatorPage =
                     page.usedIn &&
@@ -660,9 +747,9 @@ export class Page extends Flow {
                 if (
                     !isSimulatorPage &&
                     projectStore.project.settings.general.displayWidth !=
-                        undefined &&
+                    undefined &&
                     page.width !=
-                        projectStore.project.settings.general.displayWidth &&
+                    projectStore.project.settings.general.displayWidth &&
                     !(page.scaleToFit || page.isUsedAsUserWidget)
                 ) {
                     messages.push(
@@ -690,9 +777,9 @@ export class Page extends Flow {
                 if (
                     !isSimulatorPage &&
                     projectStore.project.settings.general.displayHeight !=
-                        undefined &&
+                    undefined &&
                     page.height !=
-                        projectStore.project.settings.general.displayHeight &&
+                    projectStore.project.settings.general.displayHeight &&
                     !(page.scaleToFit || page.isUsedAsUserWidget)
                 ) {
                     messages.push(
@@ -867,19 +954,30 @@ export class Page extends Flow {
         return (
             <>
                 {!flowContext.frontFace && (
-                    <ComponentsContainerEnclosure
-                        parent={this}
-                        components={this.components.filter(
-                            component => !(component instanceof Widget)
-                        )}
-                        flowContext={
-                            flowContext.flowState
-                                ? flowContext
-                                : flowContext.overrideDataContext(
-                                      this.dataContextOverridesObject
-                                  )
-                        }
-                    />
+                    <>
+                        {/* Render component groups first (behind components) */}
+                        {this.componentGroups.map(group => (
+                            <ComponentGroupRenderer
+                                key={getId(group)}
+                                group={group}
+                                flowContext={flowContext}
+                            />
+                        ))}
+
+                        <ComponentsContainerEnclosure
+                            parent={this}
+                            components={this.components.filter(
+                                component => !(component instanceof Widget)
+                            )}
+                            flowContext={
+                                flowContext.flowState
+                                    ? flowContext
+                                    : flowContext.overrideDataContext(
+                                          this.dataContextOverridesObject
+                                      )
+                            }
+                        />
+                    </>
                 )}
             </>
         );
@@ -936,8 +1034,8 @@ export class Page extends Flow {
                         flowContext.flowState
                             ? flowContext
                             : flowContext.overrideDataContext(
-                                  this.dataContextOverridesObject
-                              )
+                                this.dataContextOverridesObject
+                            )
                     }
                     width={width}
                     height={height}
@@ -998,8 +1096,8 @@ export class Page extends Flow {
         const widgets = assets.projectStore.projectTypeTraits.isDashboard
             ? []
             : (this.components.filter(
-                  widget => widget instanceof Widget
-              ) as Widget[]);
+                widget => widget instanceof Widget
+            ) as Widget[]);
 
         dataBuffer.writeArray(widgets, widget =>
             buildWidget(widget, assets, dataBuffer)
@@ -1048,8 +1146,8 @@ export class Page extends Flow {
             !ProjectEditor.getProject(this).projectTypeTraits.isLVGL
             ? undefined
             : (this.components.find(
-                  component => component instanceof Widget
-              ) as LVGLWidget);
+                component => component instanceof Widget
+            ) as LVGLWidget);
     }
 
     lvglCreate(
@@ -1068,21 +1166,21 @@ export class Page extends Flow {
         } else {
             const obj = customWidget
                 ? runtime.wasm._lvglCreateUserWidget(
-                      parentObj,
-                      customWidget.widgetIndex,
-                      customWidget.left,
-                      customWidget.top,
-                      customWidget.width,
-                      customWidget.height
-                  )
+                    parentObj,
+                    customWidget.widgetIndex,
+                    customWidget.left,
+                    customWidget.top,
+                    customWidget.width,
+                    customWidget.height
+                )
                 : runtime.wasm._lvglCreateScreen(
-                      parentObj,
-                      runtime.getCreateWidgetIndex(this),
-                      this.left,
-                      this.top,
-                      this.width,
-                      this.height
-                  );
+                    parentObj,
+                    runtime.getCreateWidgetIndex(this),
+                    this.left,
+                    this.top,
+                    this.width,
+                    this.height
+                );
 
             this.components
                 .filter(component => component instanceof Widget)

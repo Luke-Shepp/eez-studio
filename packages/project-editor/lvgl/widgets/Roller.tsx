@@ -18,6 +18,39 @@ import type { LVGLCode } from "project-editor/lvgl/to-lvgl-code";
 
 ////////////////////////////////////////////////////////////////////////////////
 
+const COMPARE_ROLLER_OPTIONS_FUNCTION = `int compareRollerOptions(lv_roller_t *roller, const char *new_val, const char *cur_val, lv_roller_mode_t mode) {
+    (void)(mode);
+
+    uint32_t new_option_count = 1;
+
+    for (int i = 0; ; i++) {
+        if (new_val[i] == '\\0') {
+            if (cur_val[i] != '\\0' && cur_val[i] != '\\n') {
+                return 1;
+            }
+            break;
+        }
+
+        if (new_val[i] != cur_val[i]) {
+            return 1;
+        }
+ 
+        if (new_val[i] == '\\n') {
+            new_option_count++;
+        }
+    }
+
+#if LVGL_VERSION_MAJOR >= 9
+    return lv_roller_get_option_count((const lv_obj_t *)roller) == new_option_count ? 0 : 1;    
+#else
+    return lv_roller_get_option_cnt((const lv_obj_t *)roller) == new_option_count ? 0 : 1;    
+#endif
+}
+
+`;
+
+////////////////////////////////////////////////////////////////////////////////
+
 export class LVGLRollerWidget extends LVGLWidget {
     options: string;
     optionsType: LVGLPropertyType;
@@ -159,6 +192,13 @@ export class LVGLRollerWidget extends LVGLWidget {
 
                 if (code.lvglBuild) {
                     const build = code.lvglBuild;
+
+                    if (!code.hasFlowSupport) {
+                        build.addFunction("compareRollerOptions", () => {
+                            build.text(COMPARE_ROLLER_OPTIONS_FUNCTION);
+                        });
+                    }
+
                     build.blockStart(
                         `if (compareRollerOptions((lv_roller_t *)${code.objectAccessor}, new_val, cur_val, LV_ROLLER_MODE_${this.mode}) != 0) {`
                     );
@@ -230,7 +270,7 @@ export class LVGLRollerWidget extends LVGLWidget {
                     "lv_roller_get_selected"
                 );
 
-                code.ifIntegerNotEqual(new_val, cur_val, () => {
+                code.ifNotEqual(new_val, cur_val, () => {
                     code.tickChangeStart();
 
                     code.callObjectFunction(
@@ -253,11 +293,11 @@ export class LVGLRollerWidget extends LVGLWidget {
                     const ta = code.callFreeFunctionWithAssignment(
                         "lv_obj_t *",
                         "ta",
-                        "lv_event_get_target",
+                        code.lv_event_get_target,
                         event
                     );
 
-                    code.ifIntegerNotEqual(tick_value_change_obj, ta, () => {
+                    code.ifNotEqual(tick_value_change_obj, ta, () => {
                         const value = code.callFreeFunctionWithAssignment(
                             "int32_t",
                             "value",

@@ -3,6 +3,7 @@ import { observer } from "mobx-react";
 import classNames from "classnames";
 
 import { Icon } from "eez-studio-ui/icon";
+import { Loader } from "eez-studio-ui/loader";
 
 const Action = observer(
     class Action extends React.Component<
@@ -55,6 +56,7 @@ export const TextAction = observer(
         {
             text: string;
             icon?: string;
+            iconSize?: number;
             title: string;
             onClick: () => void;
             selected?: boolean;
@@ -66,7 +68,12 @@ export const TextAction = observer(
         render() {
             return (
                 <Action className="EezStudio_TextAction" {...this.props}>
-                    {this.props.icon && <Icon icon={this.props.icon} />}{" "}
+                    {this.props.icon && (
+                        <Icon
+                            icon={this.props.icon}
+                            size={this.props.iconSize}
+                        />
+                    )}{" "}
                     {this.props.text}
                 </Action>
             );
@@ -130,6 +137,7 @@ export const ButtonAction = observer(
         className?: string;
         style?: React.CSSProperties;
         attention?: boolean;
+        loader?: boolean;
     }> {
         render() {
             const { style, icon, iconSize, text } = this.props;
@@ -151,6 +159,9 @@ export const ButtonAction = observer(
                         />
                     )}
                     {text}
+                    {this.props.loader && (
+                        <Loader size={20} style={{ marginLeft: 5 }} />
+                    )}
                 </Action>
             );
         }
